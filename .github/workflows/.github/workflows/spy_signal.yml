@@ -15,11 +15,16 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
-          
-     - name: Install dependencies
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install setuptools
+          pip install numpy==1.23.5
+          pip install yfinance pandas pandas_ta requests
+
+      - name: Run the signal script
+        run: python spy_signal_bot_v4.py
           pip install numpy==1.23.5
           pip install yfinance pandas pandas_ta requests
 
