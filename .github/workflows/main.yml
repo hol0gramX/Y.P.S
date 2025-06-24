@@ -2,8 +2,8 @@ name: Run SPY Signal Every Minute
 
 on:
   schedule:
-    - cron: '*/1 * * * *'   # 每分钟触发一次
-  workflow_dispatch:         # 允许手动触发
+    - cron: '*/1 * * * *'  # 每分钟运行一次
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
@@ -30,9 +30,3 @@ jobs:
         run: python spy_signal_bot_v4.py
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-
-    - name: Run script
-      env:
-        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      run: |
-        python spy_signal_bot_v4.py
