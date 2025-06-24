@@ -3,7 +3,7 @@ name: Run SPY Signal Every Minute
 on:
   schedule:
     - cron: '*/1 * * * *'  # 每分钟执行一次
-  workflow_dispatch:       # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -21,11 +21,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install setuptools
           pip install yfinance pandas pandas_ta requests
-
-      - name: Run the signal script
-        run: python spy_signal_bot_v4.py
-    pip install setuptools
-    pip install yfinance pandas pandas_ta requests
 
       - name: Run the signal script
         run: python spy_signal_bot_v4.py
