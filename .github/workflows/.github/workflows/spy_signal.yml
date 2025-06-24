@@ -23,3 +23,7 @@ jobs:
 
       - name: Run the signal script
         run: python spy_signal_bot_v4.py
+          pip install yfinance pandas pandas_ta requests
+
+      - name: Run the signal script
+        run: python spy_signal_bot_v4.py
