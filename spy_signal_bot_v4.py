@@ -45,7 +45,7 @@ def generate_signals(df):
         (last['MACDh_12_26_9'] < 0 and last['MACDh_12_26_9'] < prev['MACDh_12_26_9']) and
         (last['Volume'] > prev['Volume'])
     ):
-        signal = ⚠️ Call 結構破壞（支撐失守）：考慮止損或出場"
+     signal = "⚠️ Call 結構破壞（支撐失守）：考慮止損或出場"
 
     # === Short (Put) Signal ===
     elif (last['Close'] < last['VWAP'] < last['EMA20']) and \
