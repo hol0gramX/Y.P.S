@@ -3,7 +3,7 @@ name: Run SPY Signal Every Minute
 on:
   schedule:
     - cron: '*/1 * * * *'  # 每分钟执行一次
-  workflow_dispatch:       # 支持手动触发
+  workflow_dispatch:       # 允许手动触发
 
 jobs:
   run-script:
