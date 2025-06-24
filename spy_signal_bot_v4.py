@@ -7,7 +7,9 @@ import time
 import requests
 
 # ============ CONFIG ============
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1387184118260961413/zjzAM9-Sq7uicuWaYivb-YNOvemawTiGr8BPSiIIRj46qaP5_wWvyqWLxCkwpi5ElbGX"  #
+import os
+
+DISCORD_WEBHOOK_URL = os.environ['DISCORD_WEBHOOK_URL']
 
 # ============ SIGNAL FUNCTIONS ============
 
