@@ -1,5 +1,3 @@
+alpaca-py==0.10.0
 pandas
-pandas-ta
-yfinance
 requests
-numpy==1.23.5
