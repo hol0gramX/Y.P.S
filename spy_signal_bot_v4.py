@@ -25,13 +25,8 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'])
-    if (
-        macd is None or
-        macd.isna().all().all() or
-        not {'MACD_12_26_9', 'MACDs_12_26_9', 'MACDh_12_26_9'}.issubset(macd.columns)
-    ):
+    if macd is None or macd.isna().any().any():
         raise ValueError("MACD计算失败，结果为空或字段缺失")
-
     df['MACD'] = macd['MACD_12_26_9']
     df['MACDs'] = macd['MACDs_12_26_9']
     df['MACDh'] = macd['MACDh_12_26_9']
@@ -39,9 +34,8 @@ def compute_macd(df):
 
 def get_data():
     df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
-    if df.empty or len(df) < 35:
-        raise ValueError("下载数据不足，MACD需要至少35根K线")
-    df = df.dropna()
+    if df.empty or df.isna().any().any():
+        raise ValueError("获取数据失败，数据为空或包含缺失值")
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
@@ -107,7 +101,6 @@ def generate_signal(df):
     if len(df) < 6:
         return None, None
     row = df.iloc[-1]
-    time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
 
@@ -118,8 +111,8 @@ def generate_signal(df):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
-        return time_index, "⚠️ Call 出场信号"
+            return row.name, f"🔁 反手 Put：Call 结构破坏 + Put 入场条件成立（{strength}）"
+        return row.name, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
@@ -128,20 +121,20 @@ def generate_signal(df):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
-        return time_index, "⚠️ Put 出场信号"
+            return row.name, f"🔁 反手 Call：Put 结构破坏 + Call 入场条件成立（{strength}）"
+        return row.name, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"📈 主升浪 Call 入场（{strength}）"
+            return row.name, f"📈 主升浪 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"📉 主跌浪 Put 入场（{strength}）"
+            return row.name, f"📉 主跌浪 Put 入场（{strength}）"
 
     return None, None
 
@@ -170,3 +163,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
