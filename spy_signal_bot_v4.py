@@ -4,38 +4,14 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+import yfinance as yf
 
 STATE_FILE = "last_signal.json"
 SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-API_KEY = os.environ.get("ALPACA_API_KEY")
-SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY")
-
-client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
 def get_est_now():
     return datetime.now(tz=ZoneInfo("America/New_York"))
-
-def get_data():
-    now = get_est_now()
-    start = now - timedelta(minutes=30)
-    req = StockBarsRequest(
-        symbol_or_symbols=SYMBOL,
-        timeframe=TimeFrame.Minute,
-        start=start
-    )
-    bars = client.get_stock_bars(req).df
-    df = bars[bars.index.get_level_values(0) == SYMBOL].copy()
-    df.index = df.index.droplevel(0)
-    df = df.sort_index()
-
-    df['Vol_MA5'] = df['volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['close'], 14)
-    df['VWAP'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
-    return df.dropna()
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -46,19 +22,27 @@ def compute_rsi(series, length=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
+def get_data():
+    df = yf.download(SYMBOL, interval="1m", period="30m", progress=False)
+    df = df.dropna()
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'], 14)
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    return df.dropna()
+
 def strong_volume(row):
-    return row['volume'] >= row['Vol_MA5']
+    return row['Volume'] >= row['Vol_MA5']
 
 def check_call_entry(row):
     return (
-        row['close'] > row['vwap'] and
+        row['Close'] > row['VWAP'] and
         row['RSI'] > 52 and
         strong_volume(row)
     )
 
 def check_put_entry(row):
     return (
-        row['close'] < row['vwap'] and
+        row['Close'] < row['VWAP'] and
         row['RSI'] < 48 and
         strong_volume(row)
     )
@@ -82,7 +66,6 @@ def save_last_signal(state):
 def generate_signal(df):
     if len(df) < 6:
         return None, None
-
     row = df.iloc[-1]
     prev = df.iloc[-2]
     time_index = row.name
@@ -116,7 +99,6 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return time_index, "📉 主跌浪 Put 入场"
-
     return None, None
 
 def send_to_discord(message):
@@ -141,4 +123,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
