@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
@@ -25,9 +25,12 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'])
-    df['MACD'] = macd['MACD_12_26_9']
-    df['MACDs'] = macd['MACDs_12_26_9']
-    df['MACDh'] = macd['MACDh_12_26_9']
+    if macd is None or macd.empty:
+        df['MACD'] = df['MACDs'] = df['MACDh'] = 0
+    else:
+        df['MACD'] = macd['MACD_12_26_9']
+        df['MACDs'] = macd['MACDs_12_26_9']
+        df['MACDh'] = macd['MACDh_12_26_9']
     return df
 
 def get_data():
@@ -97,10 +100,10 @@ def check_put_entry(row):
     )
 
 def check_call_exit(row):
-    return row['RSI'] < 48 and strong_volume(row)
+    return (row['RSI'] < 48) and strong_volume(row)
 
 def check_put_exit(row):
-    return row['RSI'] > 52 and strong_volume(row)
+    return (row['RSI'] > 52) and strong_volume(row)
 
 def load_last_signal():
     if os.path.exists(STATE_FILE):
@@ -116,9 +119,11 @@ def generate_signal(df):
     if len(df) < 6:
         return None, None
     row = df.iloc[-1]
+    prev = df.iloc[-2]
     time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
+    trend_5m = confirm_5min_trend()
 
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
@@ -127,8 +132,8 @@ def generate_signal(df):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"反手 Put：Call 结构破坏 + Put 入场（{strength}）"
-        return time_index, "Call 出场信号"
+            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+        return time_index, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
@@ -137,20 +142,20 @@ def generate_signal(df):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"反手 Call：Put 结构破坏 + Call 入场（{strength}）"
-        return time_index, "Put 出场信号"
+            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+        return time_index, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"主升浪 Call 入场（{strength}）"
+            return time_index, f"📈 主升浪 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"主跌浪 Put 入场（{strength}）"
+            return time_index, f"📉 主跌浪 Put 入场（{strength}）"
     return None, None
 
 def send_to_discord(message):
@@ -175,5 +180,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
