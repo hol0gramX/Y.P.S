@@ -90,6 +90,15 @@ def check_call_exit(row):
 def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
+def check_pre_call(row):
+    return float(row['RSI']) > 50 and macd_trending_up(row)
+
+def check_pre_put(row):
+    return float(row['RSI']) < 50 and macd_trending_down(row)
+
+def is_choppy(row):
+    return abs(float(row['MACDh'])) < 0.1 and 45 < float(row['RSI']) < 55
+
 def load_last_signal():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
@@ -108,10 +117,12 @@ def generate_signal(df):
     current_pos = state.get("position", "none")
 
     time_index = row.name
-    # 处理时区：无时区先设UTC，再转美东
     if time_index.tzinfo is None:
         time_index = time_index.tz_localize("UTC")
     time_index_est = time_index.tz_convert(ZoneInfo("America/New_York"))
+
+    if is_choppy(row):
+        return time_index_est, "🚫 垃圾段不做"
 
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
@@ -144,6 +155,10 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return time_index_est, f"📉 主跌浪 Put 入场（{strength}）"
+        elif check_pre_call(row):
+            return time_index_est, "⏳ Call 预备信号"
+        elif check_pre_put(row):
+            return time_index_est, "⏳ Put 预备信号"
 
     return None, None
 
