@@ -34,7 +34,6 @@ def compute_macd(df):
 
 def get_data():
     df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
-    # 如果数据是多层列（MultiIndex），处理成单层列
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
@@ -109,9 +108,8 @@ def generate_signal(df):
     current_pos = state.get("position", "none")
 
     time_index = row.name
-    # 转换时间索引为美东时间（注意：yfinance数据默认时区通常是UTC）
+    # 处理时区：无时区先设UTC，再转美东
     if time_index.tzinfo is None:
-        # 如果无时区信息，先设为UTC
         time_index = time_index.tz_localize("UTC")
     time_index_est = time_index.tz_convert(ZoneInfo("America/New_York"))
 
@@ -174,3 +172,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
