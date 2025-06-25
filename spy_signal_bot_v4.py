@@ -33,10 +33,18 @@ def compute_macd(df):
     return df
 
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False, auto_adjust=False)
+
     if df.empty:
-        raise ValueError("无法获取数据")
+        raise ValueError("无法获取数据：返回 DataFrame 为空")
+
+    required_columns = ['High', 'Low', 'Close', 'Volume']
+    for col in required_columns:
+        if col not in df.columns:
+            raise ValueError(f"缺少必要的列：{col}")
+
+    df = df.dropna(subset=required_columns)
+
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
