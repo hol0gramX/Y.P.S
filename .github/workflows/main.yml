@@ -1,9 +1,9 @@
-name: Run SPY Signal Every Minute
+name: Run SPY Signal Every Minute (Market Hours Only)
 
 on:
   schedule:
-    - cron: '*/1 * * * *'  # 每分钟执行一次
-  workflow_dispatch:       # 允许手动触发
+    - cron: '*/1 13-20 * * 1-5'  # 每分钟，美股开盘期间（ET 9:00-16:59）
+  workflow_dispatch:  # 支持手动运行
 
 jobs:
   run-script:
