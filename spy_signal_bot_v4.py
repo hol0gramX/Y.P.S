@@ -25,61 +25,92 @@ def get_data():
 
     return df
 
+def check_call_exit(row, prev_row):
+    vol_threshold = row['Vol_MA5']
+    # 条件1：跌破VWAP、EMA10、跌破前低
+    cond1 = (row['Close'] < row['VWAP']) and (row['Close'] < row['EMA10']) and (row['Low'] < row['PrevLow'])
+    # 条件2：MACD柱状图为负且持续减小
+    cond2 = (row['MACDh_12_26_9'] < 0) and (row['MACDh_12_26_9'] < prev_row['MACDh_12_26_9'])
+    # 条件3：成交量放大
+    cond3 = (row['Volume'] >= vol_threshold)
+    return cond1 and cond2 and cond3
+
+def check_put_exit(row, prev_row, df):
+    vol_threshold = row['Vol_MA5']
+    cond1 = (row['Close'] > row['VWAP']) and (row['Close'] > row['EMA10']) and (row['High'] > df['PrevHigh'].iloc[-1])
+    cond2 = (row['MACDh_12_26_9'] > 0) and (row['MACDh_12_26_9'] > prev_row['MACDh_12_26_9'])
+    cond3 = (row['Volume'] >= vol_threshold)
+    return cond1 and cond2 and cond3
+
 def generate_signals(df):
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+    signals = []
+    vol_thresholds = df['Vol_MA5']
 
-    signal = None
+    # 先计算每根K线是否满足入场/出场条件
+    call_entry_flags = []
+    call_exit_flags = []
+    put_entry_flags = []
+    put_exit_flags = []
 
-    # 成交量阈值，用5分钟均量
-    vol_threshold = last['Vol_MA5']
+    for i in range(1, len(df)):
+        row = df.iloc[i]
+        prev = df.iloc[i-1]
+        vol_threshold = row['Vol_MA5']
 
-    # Call 入场信号（主升浪）
-    cond_call_entry = (
-        ((last['Close'] > last['VWAP']) or (last['Close'] > last['EMA20'])) and
-        (last['EMA5'] > last['EMA10'] > last['EMA20']) and
-        (prev['MACD_12_26_9'] < 0 <= last['MACD_12_26_9']) and
-        (last['Volume'] >= vol_threshold)
-    )
+        # Call 入场信号
+        cond_call_entry = (
+            ((row['Close'] > row['VWAP']) or (row['Close'] > row['EMA20'])) and
+            (row['EMA5'] > row['EMA10'] > row['EMA20']) and
+            (prev['MACD_12_26_9'] < 0 <= row['MACD_12_26_9']) and
+            (row['Volume'] >= vol_threshold)
+        )
+        call_entry_flags.append(cond_call_entry)
 
-    # Call 出场信号（结构破坏）
-    cond_call_exit = (
-        (last['Close'] < last['VWAP']) and
-        (last['Close'] < last['EMA10']) and
-        (last['Low'] < last['PrevLow']) and
-        (last['MACDh_12_26_9'] < 0) and
-        (last['MACDh_12_26_9'] < prev['MACDh_12_26_9']) and
-        (last['Volume'] >= vol_threshold)
-    )
+        # Call 出场信号
+        cond_call_exit = check_call_exit(row, prev)
+        call_exit_flags.append(cond_call_exit)
 
-    # Put 入场信号（主跌浪）
-    cond_put_entry = (
-        ((last['Close'] < last['VWAP']) or (last['Close'] < last['EMA20'])) and
-        (last['EMA5'] < last['EMA10'] < last['EMA20']) and
-        (prev['MACD_12_26_9'] > 0 >= last['MACD_12_26_9']) and
-        (last['Volume'] >= vol_threshold)
-    )
+        # Put 入场信号
+        cond_put_entry = (
+            ((row['Close'] < row['VWAP']) or (row['Close'] < row['EMA20'])) and
+            (row['EMA5'] < row['EMA10'] < row['EMA20']) and
+            (prev['MACD_12_26_9'] > 0 >= row['MACD_12_26_9']) and
+            (row['Volume'] >= vol_threshold)
+        )
+        put_entry_flags.append(cond_put_entry)
 
-    # Put 出场信号（结构破坏）
-    cond_put_exit = (
-        (last['Close'] > last['VWAP']) and
-        (last['Close'] > last['EMA10']) and
-        (last['High'] > last['PrevHigh']) and
-        (last['MACDh_12_26_9'] > 0) and
-        (last['MACDh_12_26_9'] > prev['MACDh_12_26_9']) and
-        (last['Volume'] >= vol_threshold)
-    )
+        # Put 出场信号
+        cond_put_exit = check_put_exit(row, prev, df)
+        put_exit_flags.append(cond_put_exit)
 
-    if cond_call_entry:
-        signal = "📈 入場訊號（主升浪）：考慮 Buy Call"
-    elif cond_call_exit:
-        signal = "⚠️ Call 結構破壞（支撐失守）：考慮止損或出場"
-    elif cond_put_entry:
-        signal = "📉 入場訊號（主跌浪）：考慮 Buy Put"
-    elif cond_put_exit:
-        signal = "⚠️ Put 結構破壞（壓力突破）：考慮止損或出場"
+    # 追踪状态，只有连续3根K线满足出场条件才触发出场信号
+    call_in_position = False
+    put_in_position = False
 
-    return signal
+    for i in range(2, len(df)-1):
+        time = df.index[i+1]  # 事件发生时间点，用下一根K线时间表示
+
+        # Call 入场
+        if not call_in_position and call_entry_flags[i]:
+            call_in_position = True
+            signals.append((time, "📈 入場訊號（主升浪）：考慮 Buy Call"))
+
+        # Call 出场 - 连续3根满足出场条件
+        if call_in_position and all(call_exit_flags[j] for j in range(i-2, i+1)):
+            call_in_position = False
+            signals.append((time, "⚠️ Call 結構破壞（支撐失守）：考慮止損或出場"))
+
+        # Put 入场
+        if not put_in_position and put_entry_flags[i]:
+            put_in_position = True
+            signals.append((time, "📉 入場訊號（主跌浪）：考慮 Buy Put"))
+
+        # Put 出场 - 连续3根满足出场条件
+        if put_in_position and all(put_exit_flags[j] for j in range(i-2, i+1)):
+            put_in_position = False
+            signals.append((time, "⚠️ Put 結構破壞（壓力突破）：考慮止損或出場"))
+
+    return signals
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
@@ -94,14 +125,14 @@ def send_to_discord(message):
 def main():
     try:
         df = get_data()
-        signal = generate_signals(df)
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if signal:
+        signals = generate_signals(df)
+        for time, signal in signals:
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
             message = f"[{now}] {signal}"
             print(message)
             send_to_discord(message)
-        else:
-            print(f"[{now}] 无信号")
+        if not signals:
+            print("无信号")
     except Exception as e:
         print(f"运行异常: {e}")
 
