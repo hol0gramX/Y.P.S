@@ -2,12 +2,20 @@ import os
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 import requests
 import json
 
 STATE_FILE = "last_signal.json"
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_URL')
+
+def get_est_now():
+    return datetime.now(tz=ZoneInfo('America/New_York'))
+
+def in_trading_hours():
+    now = get_est_now().time()
+    return time(9,30) <= now <= time(16,0)
 
 def get_data():
     df = yf.download("SPY", interval="1m", period="1d", progress=False, auto_adjust=True)
@@ -48,7 +56,7 @@ def check_put_entry(row, prev):
         (row['EMA5'] < row['EMA10'] < row['EMA20']) and
         (row['Close'] < row['MA50']) and
         (row['MACD_12_26_9'] < row['MACDs_12_26_9']) and
-        (row['MACDh_12_26_9'] < prev['MACDh_12_26_9']) and  # 放宽至只需动能下行
+        (row['MACDh_12_26_9'] < prev['MACDh_12_26_9']) and
         (row['MACDh_12_26_9'] < 0) and
         (row['RSI'] < 50) and
         strong_volume(row)
@@ -84,7 +92,7 @@ def generate_signal(df):
 
     row = df.iloc[-1]
     prev = df.iloc[-2]
-    time = df.index[-1]
+    time_index = df.index[-1]
 
     state = load_last_signal()
     current_pos = state.get("position", "none")
@@ -95,8 +103,8 @@ def generate_signal(df):
         if check_put_entry(row, prev):
             state["position"] = "put"
             save_last_signal(state)
-            return time, "🔁 反手 Put：Call 結構破壞 + Put 入場條件成立"
-        return time, "⚠️ Call 出場訊號"
+            return time_index, "🔁 反手 Put：Call 结构破坏 + Put 入场条件成立"
+        return time_index, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row, prev):
         state["position"] = "none"
@@ -104,43 +112,45 @@ def generate_signal(df):
         if check_call_entry(row, prev):
             state["position"] = "call"
             save_last_signal(state)
-            return time, "🔁 反手 Call：Put 結構破壞 + Call 入場條件成立"
-        return time, "⚠️ Put 出場訊號"
+            return time_index, "🔁 反手 Call：Put 结构破坏 + Call 入场条件成立"
+        return time_index, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row, prev):
             state["position"] = "call"
             save_last_signal(state)
-            return time, "📈 主升浪 Call 入場"
+            return time_index, "📈 主升浪 Call 入场"
         elif check_put_entry(row, prev):
             state["position"] = "put"
             save_last_signal(state)
-            return time, "📉 主跌浪 Put 入場"
+            return time_index, "📉 主跌浪 Put 入场"
 
     return None, None
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
-        print("DISCORD_WEBHOOK_URL 未設置，跳過發送")
+        print("DISCORD_WEBHOOK_URL 未设置，跳过发送")
         return
     payload = {"content": message}
     try:
         requests.post(DISCORD_WEBHOOK_URL, json=payload)
     except Exception as e:
-        print("發送 Discord 失敗：", e)
+        print("发送 Discord 失败：", e)
 
 def main():
-    try:
-        df = get_data()
-        time, signal = generate_signal(df)
-        if signal:
-            msg = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {signal}"
-            print(msg)
-            send_to_discord(msg)
-        else:
-            print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 無信號")
-    except Exception as e:
-        print("運行異常：", e)
+    now = get_est_now()
+    if not in_trading_hours():
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 非交易时间，不拉数据也不发信号")
+        return
+
+    df = get_data()
+    time_signal, signal = generate_signal(df)
+    if signal:
+        msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S')}] {signal}"
+        print(msg)
+        send_to_discord(msg)
+    else:
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
 
 if __name__ == "__main__":
     main()
