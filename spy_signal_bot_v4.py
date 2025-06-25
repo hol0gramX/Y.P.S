@@ -4,7 +4,9 @@ import pandas as pd
 import pandas_ta as ta
 import datetime
 import requests
+import json
 
+STATE_FILE = "last_signal.json"
 DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_URL')
 
 def get_data():
@@ -57,6 +59,16 @@ def check_put_exit(row, prev):
     cond3 = (row['Volume'] >= row['Vol_MA5'])
     return cond1 and cond2 and cond3
 
+def load_last_signal():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"position": "none"}
+
+def save_last_signal(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
 def generate_signal(df):
     if len(df) < 6:
         return None, None
@@ -65,20 +77,36 @@ def generate_signal(df):
     prev = df.iloc[-2]
     time = df.index[-1]
 
-    if check_call_exit(row, prev) and check_put_entry(row, prev):
-        return time, "🔁 反手 Put：Call 結構破壞 + Put 入場條件成立"
-    elif check_put_exit(row, prev) and check_call_entry(row, prev):
-        return time, "🔁 反手 Call：Put 結構破壞 + Call 入場條件成立"
+    state = load_last_signal()
+    current_pos = state.get("position", "none")
 
-    elif check_call_entry(row, prev):
-        return time, "📈 入場訊號（主升浪）：考慮 Buy Call"
-    elif check_put_entry(row, prev):
-        return time, "📉 入場訊號（主跌浪）：考慮 Buy Put"
-
-    elif check_call_exit(row, prev):
+    if current_pos == "call" and check_call_exit(row, prev):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_put_entry(row, prev):
+            state["position"] = "put"
+            save_last_signal(state)
+            return time, "🔁 反手 Put：Call 結構破壞 + Put 入場條件成立"
         return time, "⚠️ Call 結構破壞：考慮止損出場"
-    elif check_put_exit(row, prev):
+
+    elif current_pos == "put" and check_put_exit(row, prev):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_call_entry(row, prev):
+            state["position"] = "call"
+            save_last_signal(state)
+            return time, "🔁 反手 Call：Put 結構破壞 + Call 入場條件成立"
         return time, "⚠️ Put 結構破壞：考慮止損出場"
+
+    elif current_pos == "none":
+        if check_call_entry(row, prev):
+            state["position"] = "call"
+            save_last_signal(state)
+            return time, "📈 入場訊號（主升浪）：考慮 Buy Call"
+        elif check_put_entry(row, prev):
+            state["position"] = "put"
+            save_last_signal(state)
+            return time, "📉 入場訊號（主跌浪）：考慮 Buy Put"
 
     return None, None
 
