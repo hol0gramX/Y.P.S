@@ -109,6 +109,12 @@ def generate_signal(df):
     current_pos = state.get("position", "none")
 
     time_index = row.name
+    # 转换时间索引为美东时间（注意：yfinance数据默认时区通常是UTC）
+    if time_index.tzinfo is None:
+        # 如果无时区信息，先设为UTC
+        time_index = time_index.tz_localize("UTC")
+    time_index_est = time_index.tz_convert(ZoneInfo("America/New_York"))
+
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
         save_last_signal(state)
@@ -116,8 +122,8 @@ def generate_signal(df):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
-        return time_index, "⚠️ Call 出场信号"
+            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+        return time_index_est, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
@@ -126,20 +132,20 @@ def generate_signal(df):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
-        return time_index, "⚠️ Put 出场信号"
+            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+        return time_index_est, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"📈 主升浪 Call 入场（{strength}）"
+            return time_index_est, f"📈 主升浪 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"📉 主跌浪 Put 入场（{strength}）"
+            return time_index_est, f"📉 主跌浪 Put 入场（{strength}）"
 
     return None, None
 
@@ -157,12 +163,12 @@ def main():
     try:
         df = get_data()
         time_signal, signal = generate_signal(df)
-        if signal:
-            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S')}] {signal}"
+        if signal and time_signal:
+            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
         else:
-            print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
+            print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S %Z')}] 无信号")
     except Exception as e:
         print("运行出错：", e)
 
