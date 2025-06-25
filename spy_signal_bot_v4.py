@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
@@ -25,7 +25,7 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'])
-    if macd is None or macd.empty:
+    if macd is None or macd.isnull().all().all():
         df['MACD'] = df['MACDs'] = df['MACDh'] = 0
     else:
         df['MACD'] = macd['MACD_12_26_9']
@@ -63,11 +63,16 @@ def confirm_5min_trend():
     if len(df5) < 2:
         return "未知"
     last = df5.iloc[-1]
-    if last['EMA5'] > last['EMA20']:
-        return "多头"
-    elif last['EMA5'] < last['EMA20']:
-        return "空头"
-    return "震荡"
+    try:
+        if float(last['EMA5']) > float(last['EMA20']):
+            return "多头"
+        elif float(last['EMA5']) < float(last['EMA20']):
+            return "空头"
+        else:
+            return "震荡"
+    except Exception as e:
+        print("5分钟趋势判断出错：", e)
+        return "未知"
 
 def determine_strength(row, direction):
     strength = "中"
@@ -132,7 +137,7 @@ def generate_signal(df):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场条件成立（{strength}）"
         return time_index, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
@@ -142,7 +147,7 @@ def generate_signal(df):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场条件成立（{strength}）"
         return time_index, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
@@ -180,4 +185,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
