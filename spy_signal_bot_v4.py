@@ -38,16 +38,32 @@ def get_data():
     if df.empty:
         raise ValueError("无法获取数据：返回 DataFrame 为空")
 
-    # 扁平化多层列名（防止像 ('SPY', 'High') 这种结构）
+    # 打印列名和部分数据，便于调试
+    print("⚠️ 调试信息 - 数据列：", df.columns.tolist())
+    print("⚠️ 调试信息 - 前几行数据：\n", df.head(3))
+
+    # 如果是多层列名，扁平化处理
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(0)
 
-    required_columns = ['High', 'Low', 'Close', 'Volume']
-    for col in required_columns:
-        if col not in df.columns:
-            raise ValueError(f"缺少必要的列：{col}")
+    # 容错映射列名（处理可能是小写的情况）
+    column_map = {col.lower(): col for col in df.columns}
 
-    df = df.dropna(subset=required_columns)
+    required = ['high', 'low', 'close', 'volume']
+    missing = [x for x in required if x not in column_map]
+
+    if missing:
+        raise ValueError(f"缺少必要的列（可能是 API 返回问题）：{missing}")
+
+    # 标准化列名
+    df.rename(columns={
+        column_map['high']: 'High',
+        column_map['low']: 'Low',
+        column_map['close']: 'Close',
+        column_map['volume']: 'Volume'
+    }, inplace=True)
+
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
 
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
@@ -177,3 +193,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
