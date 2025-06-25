@@ -17,49 +17,56 @@ def get_data():
     df['EMA5'] = ta.ema(df['Close'], length=5)
     df['EMA10'] = ta.ema(df['Close'], length=10)
     df['EMA20'] = ta.ema(df['Close'], length=20)
+    df['MA50'] = ta.sma(df['Close'], length=50)
     df['RSI'] = ta.rsi(df['Close'], length=14)
     macd = ta.macd(df['Close'])
     df = pd.concat([df, macd], axis=1)
+    df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
     df['PrevLow'] = df['Low'].rolling(window=5).min().shift(1)
     df['PrevHigh'] = df['High'].rolling(window=5).max().shift(1)
-    df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
+
     return df.dropna()
 
-# 提前预判 Call
+def strong_volume(row):
+    return row['Volume'] >= 1.2 * row['Vol_MA5']
+
 def check_call_entry(row, prev):
     return (
         (row['Close'] > row['VWAP']) and
         (row['EMA5'] > row['EMA10'] > row['EMA20']) and
+        (row['Close'] > row['MA50']) and
         (row['MACD_12_26_9'] > row['MACDs_12_26_9']) and
         (row['MACD_12_26_9'] > prev['MACD_12_26_9']) and
-        (row['MACDh_12_26_9'] > -0.02) and  # 原来是 > 0，允许 Histogram 轻微翻红
-        (row['RSI'] > 45) and               # 原来是 > 50，允许提前识别转强
-        (row['Volume'] >= row['Vol_MA5'])
+        (row['MACDh_12_26_9'] > 0) and
+        (row['RSI'] > 50) and
+        strong_volume(row)
     )
 
-# 提前预判 Put
 def check_put_entry(row, prev):
     return (
         (row['Close'] < row['VWAP']) and
         (row['EMA5'] < row['EMA10'] < row['EMA20']) and
+        (row['Close'] < row['MA50']) and
         (row['MACD_12_26_9'] < row['MACDs_12_26_9']) and
         (row['MACD_12_26_9'] < prev['MACD_12_26_9']) and
-        (row['MACDh_12_26_9'] < 0.02) and   # 类似地提前捕捉 Histogram 转弱
-        (row['RSI'] < 55) and               # 放宽 RSI < 50 条件
-        (row['Volume'] >= row['Vol_MA5'])
+        (row['MACDh_12_26_9'] < 0) and
+        (row['RSI'] < 50) and
+        strong_volume(row)
     )
 
 def check_call_exit(row, prev):
-    cond1 = (row['Close'] < row['VWAP']) or (row['EMA5'] < row['EMA10'])
-    cond2 = (row['MACDh_12_26_9'] < prev['MACDh_12_26_9'])
-    cond3 = (row['Volume'] >= row['Vol_MA5'])
-    return cond1 and cond2 and cond3
+    return (
+        (row['Close'] < row['EMA10']) or
+        (row['MACDh_12_26_9'] < prev['MACDh_12_26_9']) or
+        (row['RSI'] < 48)
+    ) and strong_volume(row)
 
 def check_put_exit(row, prev):
-    cond1 = (row['Close'] > row['VWAP']) or (row['EMA5'] > row['EMA10'])
-    cond2 = (row['MACDh_12_26_9'] > prev['MACDh_12_26_9'])
-    cond3 = (row['Volume'] >= row['Vol_MA5'])
-    return cond1 and cond2 and cond3
+    return (
+        (row['Close'] > row['EMA10']) or
+        (row['MACDh_12_26_9'] > prev['MACDh_12_26_9']) or
+        (row['RSI'] > 52)
+    ) and strong_volume(row)
 
 def load_last_signal():
     if os.path.exists(STATE_FILE):
@@ -89,7 +96,7 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return time, "🔁 反手 Put：Call 結構破壞 + Put 入場條件成立"
-        return time, "⚠️ Call 結構破壞：考慮止損出場"
+        return time, "⚠️ Call 出場訊號"
 
     elif current_pos == "put" and check_put_exit(row, prev):
         state["position"] = "none"
@@ -98,17 +105,17 @@ def generate_signal(df):
             state["position"] = "call"
             save_last_signal(state)
             return time, "🔁 反手 Call：Put 結構破壞 + Call 入場條件成立"
-        return time, "⚠️ Put 結構破壞：考慮止損出場"
+        return time, "⚠️ Put 出場訊號"
 
     elif current_pos == "none":
         if check_call_entry(row, prev):
             state["position"] = "call"
             save_last_signal(state)
-            return time, "📈 入場訊號（主升浪）：考慮 Buy Call"
+            return time, "📈 主升浪 Call 入場"
         elif check_put_entry(row, prev):
             state["position"] = "put"
             save_last_signal(state)
-            return time, "📉 入場訊號（主跌浪）：考慮 Buy Put"
+            return time, "📉 主跌浪 Put 入場"
 
     return None, None
 
@@ -137,4 +144,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
