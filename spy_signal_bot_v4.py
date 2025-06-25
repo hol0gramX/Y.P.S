@@ -1,78 +1,73 @@
 import os
-import yfinance as yf
-import pandas as pd
-import pandas_ta as ta
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
-import requests
 import json
+import requests
+import pandas as pd
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 STATE_FILE = "last_signal.json"
-DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_URL')
+SYMBOL = "SPY"
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+API_KEY = os.environ.get("ALPACA_API_KEY")
+SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY")
+
+client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
 def get_est_now():
-    return datetime.now(tz=ZoneInfo('America/New_York'))
-
-def in_trading_hours():
-    now = get_est_now().time()
-    return time(9, 30) <= now <= time(16, 0)
+    return datetime.now(tz=ZoneInfo("America/New_York"))
 
 def get_data():
-    df = yf.download("SPY", interval="1m", period="1d", progress=False, auto_adjust=True)
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-    df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
-    df['EMA5'] = ta.ema(df['Close'], length=5)
-    df['EMA10'] = ta.ema(df['Close'], length=10)
-    df['EMA20'] = ta.ema(df['Close'], length=20)
-    df['MA50'] = ta.sma(df['Close'], length=50)
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    macd = ta.macd(df['Close'])
-    df = pd.concat([df, macd], axis=1)
-    df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
-    df['PrevLow'] = df['Low'].rolling(window=5).min().shift(1)
-    df['PrevHigh'] = df['High'].rolling(window=5).max().shift(1)
+    now = get_est_now()
+    start = now - timedelta(minutes=30)
+    req = StockBarsRequest(
+        symbol_or_symbols=SYMBOL,
+        timeframe=TimeFrame.Minute,
+        start=start
+    )
+    bars = client.get_stock_bars(req).df
+    df = bars[bars.index.get_level_values(0) == SYMBOL].copy()
+    df.index = df.index.droplevel(0)
+    df = df.sort_index()
+
+    df['Vol_MA5'] = df['volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['close'], 14)
+    df['VWAP'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
     return df.dropna()
 
+def compute_rsi(series, length=14):
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    avg_gain = up.rolling(window=length).mean()
+    avg_loss = down.rolling(window=length).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
 def strong_volume(row):
-    return row['Volume'] >= row['Vol_MA5']
+    return row['volume'] >= row['Vol_MA5']
 
-def check_call_entry(row, prev):
+def check_call_entry(row):
     return (
-        (row['Close'] > row['VWAP']) and
-        (row['EMA5'] > row['EMA10'] > row['EMA20']) and
-        (row['Close'] > row['MA50']) and
-        (row['MACD_12_26_9'] > row['MACDs_12_26_9']) and
-        (row['MACD_12_26_9'] > prev['MACD_12_26_9']) and
-        (row['MACDh_12_26_9'] > 0) and
-        (row['RSI'] > 52) and
+        row['close'] > row['vwap'] and
+        row['RSI'] > 52 and
         strong_volume(row)
     )
 
-def check_put_entry(row, prev):
+def check_put_entry(row):
     return (
-        (row['Close'] < row['VWAP']) and
-        (row['EMA5'] < row['EMA10'] < row['EMA20']) and
-        (row['Close'] < row['MA50']) and
-        (row['MACD_12_26_9'] < row['MACDs_12_26_9']) and
-        (row['MACDh_12_26_9'] < prev['MACDh_12_26_9']) and
-        (row['MACDh_12_26_9'] < 0) and
-        (row['RSI'] < 48) and
+        row['close'] < row['vwap'] and
+        row['RSI'] < 48 and
         strong_volume(row)
     )
 
-def check_call_exit(row, prev):
-    return (
-        (row['Close'] < row['EMA10']) or
-        (row['MACDh_12_26_9'] < prev['MACDh_12_26_9']) or
-        (row['RSI'] < 48)
-    ) and strong_volume(row)
+def check_call_exit(row):
+    return (row['RSI'] < 48) and strong_volume(row)
 
-def check_put_exit(row, prev):
-    return (
-        (row['Close'] > row['EMA10']) or
-        (row['MACDh_12_26_9'] > prev['MACDh_12_26_9']) or
-        (row['RSI'] > 52)
-    ) and strong_volume(row)
+def check_put_exit(row):
+    return (row['RSI'] > 52) and strong_volume(row)
 
 def load_last_signal():
     if os.path.exists(STATE_FILE):
@@ -87,41 +82,46 @@ def save_last_signal(state):
 def generate_signal(df):
     if len(df) < 6:
         return None, None
+
     row = df.iloc[-1]
     prev = df.iloc[-2]
-    time_index = df.index[-1]
+    time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
-    if current_pos == "call" and check_call_exit(row, prev):
+
+    if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
         save_last_signal(state)
-        if check_put_entry(row, prev):
+        if check_put_entry(row):
             state["position"] = "put"
             save_last_signal(state)
             return time_index, "🔁 反手 Put：Call 结构破坏 + Put 入场条件成立"
         return time_index, "⚠️ Call 出场信号"
-    elif current_pos == "put" and check_put_exit(row, prev):
+
+    elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
         save_last_signal(state)
-        if check_call_entry(row, prev):
+        if check_call_entry(row):
             state["position"] = "call"
             save_last_signal(state)
             return time_index, "🔁 反手 Call：Put 结构破坏 + Call 入场条件成立"
         return time_index, "⚠️ Put 出场信号"
+
     elif current_pos == "none":
-        if check_call_entry(row, prev):
+        if check_call_entry(row):
             state["position"] = "call"
             save_last_signal(state)
             return time_index, "📈 主升浪 Call 入场"
-        elif check_put_entry(row, prev):
+        elif check_put_entry(row):
             state["position"] = "put"
             save_last_signal(state)
             return time_index, "📉 主跌浪 Put 入场"
+
     return None, None
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
-        print("DISCORD_WEBHOOK_URL 未设置，跳过发送")
+        print("DISCORD_WEBHOOK_URL 未设置")
         return
     payload = {"content": message}
     try:
@@ -130,10 +130,6 @@ def send_to_discord(message):
         print("发送 Discord 失败：", e)
 
 def main():
-    now = get_est_now()
-    if not in_trading_hours():
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 非交易时间，不拉数据也不发信号")
-        return
     df = get_data()
     time_signal, signal = generate_signal(df)
     if signal:
@@ -141,7 +137,8 @@ def main():
         print(msg)
         send_to_discord(msg)
     else:
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
+        print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
 
 if __name__ == "__main__":
     main()
+
