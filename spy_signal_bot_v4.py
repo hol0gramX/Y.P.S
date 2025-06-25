@@ -28,7 +28,7 @@ def get_data():
     return df.dropna()
 
 def strong_volume(row):
-    return row['Volume'] >= 1.2 * row['Vol_MA5']
+    return row['Volume'] >= 1.05 * row['Vol_MA5']
 
 def check_call_entry(row, prev):
     return (
@@ -48,7 +48,7 @@ def check_put_entry(row, prev):
         (row['EMA5'] < row['EMA10'] < row['EMA20']) and
         (row['Close'] < row['MA50']) and
         (row['MACD_12_26_9'] < row['MACDs_12_26_9']) and
-        (row['MACD_12_26_9'] < prev['MACD_12_26_9']) and
+        (row['MACDh_12_26_9'] < prev['MACDh_12_26_9']) and  # 放宽至只需动能下行
         (row['MACDh_12_26_9'] < 0) and
         (row['RSI'] < 50) and
         strong_volume(row)
