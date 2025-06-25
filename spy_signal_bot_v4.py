@@ -42,13 +42,6 @@ def get_data():
     df = compute_macd(df)
     return df.dropna()
 
-def get_data_5min():
-    df = yf.download(SYMBOL, interval="5m", period="1d", progress=False)
-    df = df.dropna()
-    df['EMA5'] = df['Close'].ewm(span=5, adjust=False).mean()
-    df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
-    return df
-
 def strong_volume(row):
     return row['Volume'] >= row['Vol_MA5']
 
@@ -57,21 +50,6 @@ def macd_trending_up(row):
 
 def macd_trending_down(row):
     return row['MACD'] < row['MACDs'] and row['MACDh'] < 0
-
-def confirm_5min_trend():
-    df5 = get_data_5min()
-    if len(df5) < 2:
-        return "未知"
-    last = df5.iloc[-1]
-    try:
-        if last['EMA5'] > last['EMA20']:
-            return "多头"
-        elif last['EMA5'] < last['EMA20']:
-            return "空头"
-        else:
-            return "震荡"
-    except:
-        return "未知"
 
 def determine_strength(row, direction):
     strength = "中"
@@ -123,11 +101,9 @@ def generate_signal(df):
     if len(df) < 6:
         return None, None
     row = df.iloc[-1]
-    prev = df.iloc[-2]
     time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
-    trend_5m = confirm_5min_trend()
 
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
@@ -136,8 +112,8 @@ def generate_signal(df):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场条件成立（{strength}）｜5分钟：{trend_5m}"
-        return time_index, f"⚠️ Call 出场信号｜5分钟：{trend_5m}"
+            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场条件成立（{strength}）"
+        return time_index, f"⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
@@ -146,20 +122,20 @@ def generate_signal(df):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场条件成立（{strength}）｜5分钟：{trend_5m}"
-        return time_index, f"⚠️ Put 出场信号｜5分钟：{trend_5m}"
+            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场条件成立（{strength}）"
+        return time_index, f"⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"📈 主升浪 Call 入场（{strength}）｜5分钟：{trend_5m}"
+            return time_index, f"📈 主升浪 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"📉 主跌浪 Put 入场（{strength}）｜5分钟：{trend_5m}"
+            return time_index, f"📉 主跌浪 Put 入场（{strength}）"
 
     return None, None
 
