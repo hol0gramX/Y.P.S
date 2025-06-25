@@ -25,25 +25,27 @@ def get_data():
     df['Vol_MA5'] = df['Volume'].rolling(window=5).mean()
     return df.dropna()
 
+# 提前预判 Call
 def check_call_entry(row, prev):
     return (
         (row['Close'] > row['VWAP']) and
         (row['EMA5'] > row['EMA10'] > row['EMA20']) and
         (row['MACD_12_26_9'] > row['MACDs_12_26_9']) and
         (row['MACD_12_26_9'] > prev['MACD_12_26_9']) and
-        (row['MACDh_12_26_9'] > 0) and
-        (row['RSI'] > 50) and
+        (row['MACDh_12_26_9'] > -0.02) and  # 原来是 > 0，允许 Histogram 轻微翻红
+        (row['RSI'] > 45) and               # 原来是 > 50，允许提前识别转强
         (row['Volume'] >= row['Vol_MA5'])
     )
 
+# 提前预判 Put
 def check_put_entry(row, prev):
     return (
         (row['Close'] < row['VWAP']) and
         (row['EMA5'] < row['EMA10'] < row['EMA20']) and
         (row['MACD_12_26_9'] < row['MACDs_12_26_9']) and
         (row['MACD_12_26_9'] < prev['MACD_12_26_9']) and
-        (row['MACDh_12_26_9'] < 0) and
-        (row['RSI'] < 50) and
+        (row['MACDh_12_26_9'] < 0.02) and   # 类似地提前捕捉 Histogram 转弱
+        (row['RSI'] < 55) and               # 放宽 RSI < 50 条件
         (row['Volume'] >= row['Vol_MA5'])
     )
 
@@ -135,3 +137,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
