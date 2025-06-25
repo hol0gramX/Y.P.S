@@ -38,6 +38,10 @@ def get_data():
     if df.empty:
         raise ValueError("无法获取数据：返回 DataFrame 为空")
 
+    # 扁平化多层列名（防止像 ('SPY', 'High') 这种结构）
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(0)
+
     required_columns = ['High', 'Low', 'Close', 'Volume']
     for col in required_columns:
         if col not in df.columns:
@@ -110,7 +114,6 @@ def generate_signal(df):
     if len(df) < 6:
         return None, None
     row = df.iloc[-1]
-    prev = df.iloc[-2]
     time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
