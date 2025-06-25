@@ -38,17 +38,16 @@ def get_data():
     if df.empty:
         raise ValueError("无法获取数据：返回 DataFrame 为空")
 
-    # 打印列名和部分数据，便于调试
+    # 打印列名和前几行用于调试
     print("⚠️ 调试信息 - 数据列：", df.columns.tolist())
     print("⚠️ 调试信息 - 前几行数据：\n", df.head(3))
 
-    # 如果是多层列名，扁平化处理
+    # 处理多层列名（如 [('High', 'SPY')]）
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.droplevel(0)
+        df.columns = df.columns.droplevel(1)  # 保留价格字段，如 "Close", "Volume"
 
-    # 容错映射列名（处理可能是小写的情况）
+    # 容错列名映射
     column_map = {col.lower(): col for col in df.columns}
-
     required = ['high', 'low', 'close', 'volume']
     missing = [x for x in required if x not in column_map]
 
