@@ -25,13 +25,17 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'])
+    if macd is None or macd.empty:
+        df['MACD'] = df['MACDs'] = df['MACDh'] = 0
+        return df
     df['MACD'] = macd['MACD_12_26_9']
     df['MACDs'] = macd['MACDs_12_26_9']
     df['MACDh'] = macd['MACDh_12_26_9']
     return df
 
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="30m", progress=False)
+    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
+    df = df.tail(30)
     df = df.dropna()
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14)
@@ -177,5 +181,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
