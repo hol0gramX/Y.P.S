@@ -1,8 +1,11 @@
-import yfinance as yf
-import pandas as pd
-import pandas_ta as ta
-import json
 import os
+import json
+import requests
+import pandas as pd
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import yfinance as yf
+import pandas_ta as ta
 
 STATE_FILE = "last_signal_backtest.json"
 SYMBOL = "SPY"
@@ -22,6 +25,15 @@ def compute_macd(df):
     df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
+
+def get_data():
+    df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df = compute_macd(df)
+    return df.dropna()
 
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
@@ -69,66 +81,68 @@ def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
-    # 回测时从none开始
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
     return {"position": "none"}
 
 def save_last_signal(state):
-    # 回测时不需要保存状态到文件
-    pass
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
 
-def backtest():
-    # 下载2025年6月25日1分钟数据，注意yfinance可能无法未来数据，理论上是示范代码
-    df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-
-    # 计算指标
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
-    df = df.dropna()
-
+def generate_signal(df):
+    if len(df) < 6:
+        return None, None
+    row = df.iloc[-1]
     state = load_last_signal()
-    results = []
+    current_pos = state.get("position", "none")
 
-    for idx, row in df.iterrows():
-        current_pos = state["position"]
+    if current_pos == "call" and check_call_exit(row):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_put_entry(row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+        return row.name, "⚠️ Call 出场信号"
 
-        if current_pos == "call" and check_call_exit(row):
-            # Call出场
-            results.append((idx, "Call 出场"))
-            state["position"] = "none"
-            # 看是否反手Put入场
-            if check_put_entry(row):
-                strength = determine_strength(row, "put")
-                state["position"] = "put"
-                results.append((idx, f"反手 Put 入场（{strength}）"))
+    elif current_pos == "put" and check_put_exit(row):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+        return row.name, "⚠️ Put 出场信号"
 
-        elif current_pos == "put" and check_put_exit(row):
-            # Put出场
-            results.append((idx, "Put 出场"))
-            state["position"] = "none"
-            # 看是否反手Call入场
-            if check_call_entry(row):
-                strength = determine_strength(row, "call")
-                state["position"] = "call"
-                results.append((idx, f"反手 Call 入场（{strength}）"))
+    elif current_pos == "none":
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, f"📈 主升浪 Call 入场（{strength}）"
+        elif check_put_entry(row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, f"📉 主跌浪 Put 入场（{strength}）"
 
-        elif current_pos == "none":
-            if check_call_entry(row):
-                strength = determine_strength(row, "call")
-                state["position"] = "call"
-                results.append((idx, f"Call 入场（{strength}）"))
-            elif check_put_entry(row):
-                strength = determine_strength(row, "put")
-                state["position"] = "put"
-                results.append((idx, f"Put 入场（{strength}）"))
+    return None, None
 
-    # 打印回测结果
-    for time, signal in results:
-        print(f"[{time}] {signal}")
+def main():
+    try:
+        df = get_data()
+        for i in range(5, len(df)):
+            df_slice = df.iloc[:i+1]
+            time_signal, signal = generate_signal(df_slice)
+            if signal and time_signal is not None:
+                # 转换时区为美东时间
+                et_time = time_signal.tz_convert(ZoneInfo("America/New_York"))
+                print(f"[{et_time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
+    except Exception as e:
+        print("运行出错：", e)
 
 if __name__ == "__main__":
-    backtest()
+    main()
