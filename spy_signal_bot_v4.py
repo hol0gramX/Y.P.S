@@ -25,12 +25,11 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'])
-    if macd is not None:
-        df['MACD'] = macd['MACD_12_26_9']
-        df['MACDs'] = macd['MACDs_12_26_9']
-        df['MACDh'] = macd['MACDh_12_26_9']
-    else:
-        df['MACD'] = df['MACDs'] = df['MACDh'] = 0
+    if macd is None or macd.isna().all().all():
+        raise ValueError("MACD计算失败，结果为空")
+    df['MACD'] = macd['MACD_12_26_9']
+    df['MACDs'] = macd['MACDs_12_26_9']
+    df['MACDh'] = macd['MACDh_12_26_9']
     return df
 
 def get_data():
@@ -43,49 +42,49 @@ def get_data():
     return df.dropna()
 
 def strong_volume(row):
-    return row['Volume'] >= row['Vol_MA5']
+    return float(row['Volume']) >= float(row['Vol_MA5'])
 
 def macd_trending_up(row):
-    return row['MACD'] > row['MACDs'] and row['MACDh'] > 0
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
 
 def macd_trending_down(row):
-    return row['MACD'] < row['MACDs'] and row['MACDh'] < 0
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
 
 def determine_strength(row, direction):
     strength = "中"
     if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5:
+        if float(row['RSI']) > 65 and float(row['MACDh']) > 0.5:
             strength = "强"
-        elif row['RSI'] < 55:
+        elif float(row['RSI']) < 55:
             strength = "弱"
     elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5:
+        if float(row['RSI']) < 35 and float(row['MACDh']) < -0.5:
             strength = "强"
-        elif row['RSI'] > 45:
+        elif float(row['RSI']) > 45:
             strength = "弱"
     return strength
 
 def check_call_entry(row):
     return (
-        row['Close'] > row['VWAP'] and
-        row['RSI'] > 52 and
+        float(row['Close']) > float(row['VWAP']) and
+        float(row['RSI']) > 52 and
         strong_volume(row) and
         macd_trending_up(row)
     )
 
 def check_put_entry(row):
     return (
-        row['Close'] < row['VWAP'] and
-        row['RSI'] < 48 and
+        float(row['Close']) < float(row['VWAP']) and
+        float(row['RSI']) < 48 and
         strong_volume(row) and
         macd_trending_down(row)
     )
 
 def check_call_exit(row):
-    return (row['RSI'] < 48) and strong_volume(row)
+    return float(row['RSI']) < 48 and strong_volume(row)
 
 def check_put_exit(row):
-    return (row['RSI'] > 52) and strong_volume(row)
+    return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
     if os.path.exists(STATE_FILE):
@@ -101,6 +100,7 @@ def generate_signal(df):
     if len(df) < 6:
         return None, None
     row = df.iloc[-1]
+    prev = df.iloc[-2]
     time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
@@ -113,7 +113,7 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场条件成立（{strength}）"
-        return time_index, f"⚠️ Call 出场信号"
+        return time_index, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
@@ -123,7 +123,7 @@ def generate_signal(df):
             state["position"] = "call"
             save_last_signal(state)
             return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场条件成立（{strength}）"
-        return time_index, f"⚠️ Put 出场信号"
+        return time_index, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row):
@@ -150,14 +150,17 @@ def send_to_discord(message):
         print("发送 Discord 失败：", e)
 
 def main():
-    df = get_data()
-    time_signal, signal = generate_signal(df)
-    if signal:
-        msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S')}] {signal}"
-        print(msg)
-        send_to_discord(msg)
-    else:
-        print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
+    try:
+        df = get_data()
+        time_signal, signal = generate_signal(df)
+        if signal:
+            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S')}] {signal}"
+            print(msg)
+            send_to_discord(msg)
+        else:
+            print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
+    except Exception as e:
+        print("运行出错：", e)
 
 if __name__ == "__main__":
     main()
