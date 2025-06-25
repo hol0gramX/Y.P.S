@@ -1,9 +1,6 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-from zoneinfo import ZoneInfo  # Python 3.9+
-# 如果你的Python版本低于3.9，用下面这行替换上面
-# import pytz
 
 STATE_FILE = "last_signal_backtest.json"
 SYMBOL = "SPY"
@@ -78,10 +75,12 @@ def save_last_signal(state):
     pass
 
 def backtest():
-    # 下载2025年6月25日1分钟数据
+    est = "America/New_York"
     df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
 
     # 计算指标
@@ -94,13 +93,14 @@ def backtest():
     state = load_last_signal()
     results = []
 
-    est = ZoneInfo("America/New_York")  # 美东时区
-
     for idx, row in df.iterrows():
         current_pos = state["position"]
 
-        # idx 默认是 UTC 时间戳，转换成美东时间
-        est_time = idx.tz_localize('UTC').tz_convert(est)
+        # 处理时间索引时区
+        if idx.tz is None:
+            est_time = idx.tz_localize('UTC').tz_convert(est)
+        else:
+            est_time = idx.tz_convert(est)
 
         if current_pos == "call" and check_call_exit(row):
             results.append((est_time, "Call 出场"))
@@ -128,8 +128,10 @@ def backtest():
                 state["position"] = "put"
                 results.append((est_time, f"Put 入场（{strength}）"))
 
+    # 打印回测结果，时间按美东显示
     for time, signal in results:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
 if __name__ == "__main__":
     backtest()
+
