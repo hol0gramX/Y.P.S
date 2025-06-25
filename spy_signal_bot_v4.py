@@ -6,7 +6,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
-import time
 
 STATE_FILE = "last_signal.json"
 SYMBOL = "SPY"
@@ -34,18 +33,13 @@ def compute_macd(df):
     return df
 
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False, auto_adjust=False)
-    # 处理多级列，取第一个level列名
+    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
+    # 如果数据是多层列（MultiIndex），处理成单层列
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    # 确认关键列存在，忽略大小写差异
-    expected_cols = ['High', 'Low', 'Close', 'Volume']
-    missing_cols = [col for col in expected_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"缺少必要的列（可能是 API 返回问题）：{missing_cols}")
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
     if df.empty:
-        raise ValueError("无法获取有效数据")
+        raise ValueError("无法获取数据")
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
@@ -111,10 +105,10 @@ def generate_signal(df):
     if len(df) < 6:
         return None, None
     row = df.iloc[-1]
-    time_index = row.name
     state = load_last_signal()
     current_pos = state.get("position", "none")
 
+    time_index = row.name
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
         save_last_signal(state)
@@ -155,13 +149,11 @@ def send_to_discord(message):
         return
     payload = {"content": message}
     try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        if response.status_code != 204:
-            print(f"发送 Discord 失败，状态码：{response.status_code}, 内容：{response.text}")
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
     except Exception as e:
         print("发送 Discord 失败：", e)
 
-def run_signal_check():
+def main():
     try:
         df = get_data()
         time_signal, signal = generate_signal(df)
@@ -172,17 +164,7 @@ def run_signal_check():
         else:
             print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S')}] 无信号")
     except Exception as e:
-        print(f"运行出错：{e}")
-
-def main():
-    while True:
-        now = get_est_now()
-        # 美股交易时间 ET 9:00 - 16:59，且周一到周五
-        if 9 <= now.hour < 17 and now.weekday() < 5:
-            run_signal_check()
-        else:
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 非交易时间，跳过")
-        time.sleep(60)
+        print("运行出错：", e)
 
 if __name__ == "__main__":
     main()
