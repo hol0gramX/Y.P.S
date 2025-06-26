@@ -14,11 +14,12 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 def get_est_now():
     return datetime.now(tz=ZoneInfo("America/New_York"))
 
+# 修改这里，4:00 ~ 16:00 全时段运行（含盘前盘后）
 def is_market_open():
     now = get_est_now()
-    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    premarket_start = now.replace(hour=4, minute=0, second=0, microsecond=0)
     market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return market_open <= now <= market_close
+    return premarket_start <= now <= market_close
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -39,12 +40,21 @@ def compute_macd(df):
     return df
 
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
+    # 注意这里加了 prepost=True，确保盘前盘后数据都获取
+    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False, prepost=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
     if df.empty:
         raise ValueError("无法获取数据")
+
+    # 打印时间范围，确认数据
+    print(f"数据时间范围: {df.index[0]} ~ {df.index[-1]}")
+
+    # 数据行数检查，防止指标计算失败
+    if len(df) < 20:
+        raise ValueError("数据量不足，无法计算指标")
+
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
@@ -183,4 +193,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
