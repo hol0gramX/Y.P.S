@@ -1,5 +1,5 @@
-# ✅ 最新稳定版：spy_backtest_20250626.py 
-# 含 5分钟趋势判断，修复所有 Series 判断漏洞
+# ✅ 自动保存信号为 CSV 的回测版本
+# 文件名：spy_backtest_20250626.py
 
 import os
 import json
@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 SYMBOL = "SPY"
 STATE_FILE = "last_signal.json"
 EST = ZoneInfo("America/New_York")
+CSV_LOG_NAME = "signal_log_backtest.csv"
 
 # -------- 时间函数 --------
 def get_est_now():
@@ -37,29 +38,19 @@ def compute_macd(df):
 def get_latest_5min_trend(df_5min, ts):
     try:
         recent = df_5min.loc[(df_5min.index <= ts) & (df_5min.index > ts - timedelta(hours=2))]
-        if recent.empty:
-            return None
-
         macd = ta.macd(recent['Close'])
-        if macd is None or macd.empty:
-            return None
-
-        macdh = macd.get('MACDh_12_26_9', pd.Series(dtype=float)).dropna()
-        if macdh.empty or len(macdh) < 5:
-            return None
-
+        macdh = macd['MACDh_12_26_9'].dropna()
         recent_macdh = macdh.iloc[-5:]
         if (recent_macdh > 0).all():
             return {"trend": "📈上涨"}
         elif (recent_macdh < 0).all():
-            return {"trend": "📉下降"}
+            return {"trend": "📉下跌"}
         else:
             return {"trend": "🔁震荡"}
-    except Exception as e:
-        print(f"[5min趋势判断失败] {e}")
+    except:
         return None
 
-# -------- 信号判断逻辑 --------
+# -------- 信号判断 --------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
 
 def determine_strength(row, direction):
@@ -89,10 +80,9 @@ def save_last_signal(state):
 # -------- 数据获取 --------
 def get_data():
     now = get_est_now()
-    end_dt = now.replace(hour=16, minute=0, second=1, microsecond=0)
+    end_dt = now.replace(hour=16, minute=0, second=1)
     start_dt = end_dt - timedelta(days=2)
     df = yf.download(SYMBOL, interval="1m", start=start_dt, end=end_dt, progress=False, prepost=True, auto_adjust=True)
-    if df.empty: raise ValueError("下载失败或数据为空")
     df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
     df = df.dropna(subset=['High','Low','Close','Volume'])
     df = df[df['Volume'] > 0]
@@ -106,12 +96,10 @@ def get_data():
 
 # -------- 主流程 --------
 def main():
-    print(f"[🔁 回溯开始] {get_est_now().isoformat()}")
+    print(f"[🔁 回测开始] {get_est_now().isoformat()}")
     try:
         df = get_data()
         df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False, auto_adjust=True)
-        if df_5min.empty:
-            raise ValueError("5分钟数据为空，无法判断趋势")
         df_5min.index = df_5min.index.tz_localize("UTC").tz_convert(EST) if df_5min.index.tz is None else df_5min.index.tz_convert(EST)
 
         state = load_last_signal()
@@ -154,18 +142,23 @@ def main():
                     signal = f"📉 主跌浪 Put 入场（{strength}，趋势：{trend_label}）"
 
             if signal:
-                signals.append(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
+                signals.append((time_est, signal))
                 save_last_signal(state)
 
-        if not signals:
-            print("[信息] 今日无信号生成")
+        if signals:
+            with open(CSV_LOG_NAME, "w") as f:
+                f.write("timestamp,signal\n")
+                for ts, msg in signals:
+                    f.write(f"{ts.strftime('%Y-%m-%d %H:%M:%S')},{msg}\n")
+            print(f"[✅ 保存完成] 写入 {CSV_LOG_NAME} 共 {len(signals)} 条信号")
         else:
-            print("\n".join(signals))
+            print("[信息] 今日无信号生成")
 
     except Exception as e:
-        print(f"[❌ 回溯失败] {e}")
+        print(f"[❌ 回测失败] {e}")
 
 if __name__ == "__main__":
     main()
+
 
 
