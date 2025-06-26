@@ -1,28 +1,29 @@
-name: Backtest and Analyze
+name: Daily Backtest
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 21 * * *'  # 每天美股收盘后（21:30 EST）运行
+    - cron: '0 20 * * *'  # 每天美东时间 4PM 后运行
 
 jobs:
   run-backtest:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: 3.11
 
       - name: Install dependencies
         run: |
-          pip install pandas yfinance pandas_ta
+          pip install yfinance pandas pandas_ta
 
-      - name: Run Backtest
+      - name: Run backtest
         run: python spy_backtest_20250626.py
 
-      - name: Run Analyzer
+      - name: Run analyzer
         run: python strategy_refinement_analyzer_backtest.py
+
