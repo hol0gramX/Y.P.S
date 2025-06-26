@@ -65,8 +65,8 @@ def get_data():
 
     start_dt = sessions[0][0]
     end_dt = sessions[-1][1]
-    yf_start = start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M')
-    yf_end = end_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M')
+    yf_start = start_dt.tz_convert('UTC')
+    yf_end = end_dt.tz_convert('UTC')
     print("yf_range UTC:", yf_start, "-", yf_end)
 
     df = yf.download(SYMBOL, interval="1m",
