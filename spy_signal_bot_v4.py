@@ -10,44 +10,16 @@ import pandas_market_calendars as mcal
 import csv
 from pathlib import Path
 
-# --------- Gist 配置 ---------
 GIST_ID = "7490de39ccc4e20445ef576832bea34b"
 GIST_FILENAME = "last_signal.json"
 GIST_TOKEN = os.environ.get("GIST_TOKEN")
-
-# --------- 常规变量 ---------
 SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 LOG_FILE = "signal_log.csv"
 
-# --------- 时间工具 ---------
-def get_est_now():
-    return datetime.now(tz=EST)
-
-# 初始化一次性 schedule（替代重复 schedule 查询）
-today = get_est_now().date()
-today_schedule = nasdaq.schedule(start_date=today, end_date=today)
-
-def get_market_open_close():
-    if today_schedule.empty: return None, None
-    row = today_schedule.iloc[0]
-    return row['market_open'].tz_convert(EST), row['market_close'].tz_convert(EST)
-
-def is_early_close():
-    if today_schedule.empty: return False
-    cl = today_schedule.iloc[0]['market_close'].tz_convert(EST)
-    return cl < pd.Timestamp.combine(today, time(16, 0)).tz_localize(EST)
-
-def is_market_open_now():
-    now = get_est_now()
-    if today_schedule.empty: return False
-    op = today_schedule.iloc[0]['market_open'].tz_convert(EST)
-    cl = today_schedule.iloc[0]['market_close'].tz_convert(EST)
-    return op <= now <= cl
-
-# --------- 日志函数 ---------
+# --------- 日志 ---------
 def log_signal_to_csv(timestamp, signal):
     file_exists = Path(LOG_FILE).exists()
     with open(LOG_FILE, mode="a", newline="") as f:
@@ -75,6 +47,31 @@ def save_last_signal(state):
     requests.patch(f"https://api.github.com/gists/{GIST_ID}", headers=headers, json=data)
 
 load_last_signal = load_last_signal_from_gist
+
+# --------- 时间工具 ---------
+def get_est_now():
+    return datetime.now(tz=EST)
+
+def get_market_sessions(today):
+    trade_days = nasdaq.valid_days(start_date=today - timedelta(days=7), end_date=today)
+    recent = trade_days[-2:]
+    sch = nasdaq.schedule(start_date=recent[0], end_date=recent[1])
+    sessions = []
+    for ts in sch.itertuples():
+        op = ts.market_open.tz_convert(EST)
+        cl = ts.market_close.tz_convert(EST)
+        early = cl < pd.Timestamp.combine(ts.Index.date(), time(16)).tz_localize(EST)
+        sessions.append((op, cl, early))
+    return sessions
+
+def is_market_open_now():
+    now = get_est_now()
+    sch = nasdaq.schedule(start_date=now.date(), end_date=now.date())
+    if sch.empty:
+        return False
+    market_open = sch.iloc[0]['market_open'].tz_convert(EST)
+    market_close = sch.iloc[0]['market_close'].tz_convert(EST)
+    return market_open <= now <= market_close
 
 # --------- 技术指标 ---------
 def compute_rsi(s, length=14):
@@ -104,21 +101,9 @@ def get_5min_trend():
 
 # --------- 数据拉取 ---------
 def get_data():
-    now = get_est_now()
-    today = now.date()
-    trade_days = nasdaq.schedule(start_date=today - timedelta(days=10), end_date=today).index.tz_localize(None)
-    trade_days = trade_days[trade_days <= pd.Timestamp(today)]
-    recent = trade_days[-2:]
-
-    sessions = []
-    for d in recent:
-        op, cl = nasdaq.schedule(start_date=d, end_date=d).iloc[0][['market_open', 'market_close']]
-        op, cl = op.tz_convert(EST), cl.tz_convert(EST)
-        early = cl < pd.Timestamp.combine(d, time(16, 0)).tz_localize(EST)
-        sessions.append((op, cl, early))
-
-    start_dt = sessions[0][0]
-    end_dt = sessions[-1][1]
+    sessions = get_market_sessions(get_est_now().date())
+    start_dt = sessions[0][0] - timedelta(hours=5, minutes=30)
+    end_dt = sessions[-1][1] + timedelta(hours=4)
     df = yf.download(SYMBOL, interval="1m", start=start_dt.tz_convert('UTC'), end=end_dt.tz_convert('UTC'), progress=False, prepost=True, auto_adjust=True)
     if df.empty: raise ValueError("数据为空")
 
@@ -163,8 +148,10 @@ def allow_put_reentry(row, prev): return prev['Close'] > prev['VWAP'] and row['C
 # --------- 收盘清仓 ---------
 def check_market_closed_and_clear():
     now = get_est_now()
-    if today_schedule.empty: return False
-    close_time = today_schedule.iloc[0]['market_close'].tz_convert(EST)
+    sch = nasdaq.schedule(start_date=now.date(), end_date=now.date())
+    if sch.empty:
+        return False
+    close_time = sch.iloc[0]['market_close'].tz_convert(EST)
     if now > close_time + timedelta(minutes=1):
         state = load_last_signal()
         if state.get("position", "none") != "none":
