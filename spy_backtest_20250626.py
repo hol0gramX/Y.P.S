@@ -46,26 +46,31 @@ def compute_macd(df):
 
 # ========= 趋势判断（5min） =========
 def get_latest_5min_trend(df_5min, ts):
-    subset = df_5min.loc[df_5min.index <= ts]
-    recent = subset.loc[subset.index >= ts - timedelta(hours=2)]
-    
-    # ✅ 显式判断 empty
-    if recent.empty or len(recent) < 10:
+    try:
+        subset = df_5min[df_5min.index <= ts]
+        recent = subset[subset.index >= ts - timedelta(hours=2)]
+
+        if recent.empty or len(recent) < 20:
+            return None
+
+        ma20 = recent['Close'].rolling(20).mean()
+        if pd.isna(ma20.iloc[-1]):
+            return None
+
+        latest_close = recent.iloc[-1]['Close']
+        latest_ma20 = ma20.iloc[-1]
+
+        if latest_close > latest_ma20:
+            return {"trend": "📈上涨"}
+        elif latest_close < latest_ma20:
+            return {"trend": "📉下跌"}
+        else:
+            return {"trend": "⚖️震荡"}
+
+    except Exception as e:
+        print(f"[5min趋势判断失败] {e}")
         return None
 
-    ma20 = recent['Close'].rolling(20).mean()
-    latest = recent.iloc[-1]['Close']
-    
-    # ⚠️ 注意：ma20.iloc[-1] 也可能是 NaN（rolling 尚未满20）
-    if pd.isna(ma20.iloc[-1]):
-        return None
-
-    if latest > ma20.iloc[-1]:
-        return {"trend": "📈上涨"}
-    elif latest < ma20.iloc[-1]:
-        return {"trend": "📉下跌"}
-    else:
-        return {"trend": "⚖️震荡"}
 
 
 # ========= 数据加载 =========
