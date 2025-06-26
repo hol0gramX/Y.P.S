@@ -1,5 +1,5 @@
-# ✅ 最新稳定版：spy_backtest_20250626.py
-# 含 5分钟趋势判断，修复所有 Series 判断歧义
+# ✅ 最新稳定版：spy_backtest_20250626.py 
+# 含 5分钟趋势判断，修复所有 Series 判断漏洞
 
 import os
 import json
@@ -34,9 +34,6 @@ def compute_macd(df):
     return df
 
 # -------- 趋势判断 --------
-from datetime import timedelta
-import pandas_ta as ta
-
 def get_latest_5min_trend(df_5min, ts):
     try:
         recent = df_5min.loc[(df_5min.index <= ts) & (df_5min.index > ts - timedelta(hours=2))]
@@ -47,7 +44,7 @@ def get_latest_5min_trend(df_5min, ts):
         if macd is None or macd.empty:
             return None
 
-        macdh = macd['MACDh_12_26_9'].dropna()
+        macdh = macd.get('MACDh_12_26_9', pd.Series(dtype=float)).dropna()
         if macdh.empty or len(macdh) < 5:
             return None
 
@@ -55,13 +52,12 @@ def get_latest_5min_trend(df_5min, ts):
         if (recent_macdh > 0).all():
             return {"trend": "📈上涨"}
         elif (recent_macdh < 0).all():
-            return {"trend": "📉下跌"}
+            return {"trend": "📉下降"}
         else:
             return {"trend": "🔁震荡"}
     except Exception as e:
         print(f"[5min趋势判断失败] {e}")
         return None
-
 
 # -------- 信号判断逻辑 --------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
@@ -110,7 +106,7 @@ def get_data():
 
 # -------- 主流程 --------
 def main():
-    print(f"[🔁 回测开始] {get_est_now().isoformat()}")
+    print(f"[🔁 回溯开始] {get_est_now().isoformat()}")
     try:
         df = get_data()
         df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False, auto_adjust=True)
@@ -167,7 +163,7 @@ def main():
             print("\n".join(signals))
 
     except Exception as e:
-        print(f"[❌ 回测失败] {e}")
+        print(f"[❌ 回溯失败] {e}")
 
 if __name__ == "__main__":
     main()
