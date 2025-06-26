@@ -1,4 +1,4 @@
-import os 
+import os
 import json
 import requests
 import pandas as pd
@@ -16,19 +16,19 @@ def get_est_now():
 
 def is_market_open():
     now = get_est_now()
-    return now.time() >= datetime.strptime("09:30", "%H:%M").time() and now.time() < datetime.strptime("16:00", "%H:%M").time()
+    return time(9,30) <= now.time() < time(16,0)
 
 def is_premarket():
     now = get_est_now()
-    return now.time() >= datetime.strptime("04:00", "%H:%M").time() and now.time() < datetime.strptime("09:30", "%H:%M").time()
+    return time(4,0) <= now.time() < time(9,30)
 
 def is_aftermarket():
     now = get_est_now()
-    return now.time() >= datetime.strptime("16:00", "%H:%M").time() and now.time() < datetime.strptime("20:00", "%H:%M").time()
+    return time(16,0) <= now.time() < time(20,0)
 
 def is_outside_trading():
     now = get_est_now()
-    return now.time() < datetime.strptime("04:00", "%H:%M").time() or now.time() >= datetime.strptime("20:00", "%H:%M").time()
+    return now.time() < time(4,0) or now.time() >= time(20,0)
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -37,44 +37,62 @@ def compute_rsi(series, length=14):
     avg_gain = up.rolling(window=length).mean()
     avg_loss = down.rolling(window=length).mean()
     rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
 def compute_macd(df):
-    df = df.copy()  # 防止 SettingWithCopyWarning
+    df = df.copy()
     macd = ta.macd(df['Close'])
     if macd is None or macd.isna().all().any():
-        raise ValueError("MACD计算失败，结果为空或字段缺失")
+        raise ValueError("MACD计算失败")
     df['MACD'] = macd['MACD_12_26_9'].fillna(0)
     df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="2d", progress=False, prepost=True, auto_adjust=True)
+    df = yf.download(
+        SYMBOL,
+        interval="1m",
+        period="2d",
+        progress=False,
+        prepost=True,
+        auto_adjust=True
+    )
+    # 扁平化列名
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
+    # 过滤无效数据（成交量0的K线）
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-    if df.empty:
-        raise ValueError("无法获取数据")
-    
-    df.index = df.index.tz_convert("America/New_York")
+    df = df[df['Volume'] > 0]
+
+    # 统一时区处理
+    if df.index.tz is None:
+        df.index = df.index.tz_localize('UTC').tz_convert('America/New_York')
+    else:
+        df.index = df.index.tz_convert('America/New_York')
 
     now = get_est_now()
     today = now.date()
     yesterday = today - timedelta(days=1)
 
+    # 过滤：昨天盘后16:00-20:00，今天盘前04:00-16:00数据
     df_filtered = df[
-        ((df.index.date == yesterday) & (df.index.time >= time(16, 0)) & (df.index.time < time(20, 0))) |
-        ((df.index.date == today) & (df.index.time >= time(4, 0)) & (df.index.time < time(16, 0)))
-    ].copy()  # 这里必须加 copy() 避免 SettingWithCopyWarning
+        ((df.index.date == yesterday) & (df.index.time >= time(16,0)) & (df.index.time < time(20,0))) |
+        ((df.index.date == today) & (df.index.time >= time(4,0)) & (df.index.time < time(16,0)))
+    ].copy()
 
     if len(df_filtered) < 30:
         raise ValueError("数据行数不足，无法计算指标")
 
+    # 计算指标
     df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
     df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
     df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
     df_filtered = compute_macd(df_filtered)
+    df_filtered.fillna(method='ffill', inplace=True)
+
     return df_filtered.dropna()
 
 def strong_volume(row):
@@ -181,39 +199,41 @@ def generate_signal(df):
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
-        print("DISCORD_WEBHOOK_URL 未设置")
+        print("DISCORD_WEBHOOK_URL 未设置，消息不发送")
         return
     payload = {"content": message}
     try:
         requests.post(DISCORD_WEBHOOK_URL, json=payload)
     except Exception as e:
-        print("发送 Discord 失败：", e)
+        print("发送 Discord 失败:", e)
 
 def main():
     now = get_est_now()
     try:
         if is_outside_trading():
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🌙 非交易时间（20:00-04:00），跳过运行")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🌙 非交易时间，跳过运行")
             return
 
         df = get_data()
 
-        if is_premarket() or is_aftermarket():
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 {'盘前' if is_premarket() else '盘后'}数据采集完成，数据时间: {df.index[0]} ~ {df.index[-1]}")
+        if is_premarket():
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 盘前数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
+            return
+        if is_aftermarket():
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 盘后数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
             return
 
-        # 盘中才生成信号
+        # 盘中生成交易信号
         time_signal, signal = generate_signal(df)
         if signal and time_signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
         else:
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无信号")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无交易信号")
     except Exception as e:
         print("运行出错：", e)
 
 if __name__ == "__main__":
     main()
-
 
