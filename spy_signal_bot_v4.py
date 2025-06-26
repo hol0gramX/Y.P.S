@@ -168,6 +168,15 @@ def allow_call_reentry(row, prev_row):
         strong_volume(row)
     )
 
+def allow_put_reentry(row, prev_row):
+    return (
+        prev_row['Close'] > prev_row['VWAP'] and
+        row['Close'] < row['VWAP'] and
+        row['RSI'] < 47 and
+        row['MACDh'] < 0.05 and
+        strong_volume(row)
+    )
+
 def check_market_closed_and_clear():
     now = get_est_now()
     today = now.date()
@@ -231,6 +240,11 @@ def generate_signal(df):
             state["position"] = "call"
             save_last_signal(state)
             return time_index_est, f"📈 趋势回补 Call 再入场（{strength}，5min趋势：{trend_5min}）"
+        elif allow_put_reentry(row, prev_row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return time_index_est, f"📉 趋势回补 Put 再入场（{strength}，5min趋势：{trend_5min}）"
 
     return None, None
 
@@ -262,6 +276,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
