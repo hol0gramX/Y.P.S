@@ -8,6 +8,7 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas_market_calendars as mcal
 
+# 配置项
 STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
@@ -52,10 +53,10 @@ def compute_rsi(series, length=14):
     avg_gain = up.rolling(window=length).mean()
     avg_loss = down.rolling(window=length).mean()
     rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
 
 def compute_macd(df):
-    df = df.copy()
     macd = ta.macd(df['Close'])
     df['MACD'] = macd['MACD_12_26_9'].fillna(0)
     df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
@@ -84,8 +85,8 @@ def get_data():
     start_dt = sessions[0]['open']
     end_dt = sessions[-1]['close']
 
-    yf_start = start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
-    yf_end = (end_dt + timedelta(seconds=1)).tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
+    yf_start = start_dt.tz_convert('UTC').replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+    yf_end = (end_dt + timedelta(seconds=1)).tz_convert('UTC').replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
 
     df = yf.download(
         SYMBOL,
@@ -137,18 +138,18 @@ def get_data():
         valid_mask = valid_mask | mask
 
     df_filtered = df[valid_mask].copy()
-
     if len(df_filtered) < 30:
         raise ValueError("数据行数不足，无法计算指标")
 
     df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
-    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
+    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14)
     df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
     df_filtered = compute_macd(df_filtered)
     df_filtered.ffill(inplace=True)
 
     return df_filtered.dropna()
 
+# 判断函数
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
@@ -194,29 +195,25 @@ def check_call_exit(row):
 def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
+# 状态管理，避免重复进场信号
 def load_last_signal():
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r') as f:
                 state = json.load(f)
-                print(f"[DEBUG] 读取持仓状态: {state}")
                 return state
-    except Exception as e:
-        print(f"[ERROR] 读取状态失败: {e}")
-    print("[DEBUG] 状态文件不存在或读取失败，默认无仓位")
+    except Exception:
+        pass
     return {"position": "none"}
 
 def save_last_signal(state):
     try:
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f)
-        print(f"[DEBUG] 保存持仓状态: {state}")
-        with open(STATE_FILE, 'r') as f:
-            verify = json.load(f)
-        print(f"[DEBUG] 验证保存状态: {verify}")
-    except Exception as e:
-        print(f"[ERROR] 保存状态失败: {e}")
+    except Exception:
+        pass
 
+# 核心信号逻辑，保证：有仓位时先出场，出场后判断是否反手或空仓入场，空仓时检测进场
 def generate_signal(df):
     if len(df) < 6:
         return None, None
@@ -230,38 +227,50 @@ def generate_signal(df):
         time_index = time_index.tz_localize("UTC")
     time_index_est = time_index.tz_convert(EST)
 
-    if current_pos == "call" and check_call_exit(row):
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_put_entry(row):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
+    if current_pos == "call":
+        # Call仓位，判断出场信号
+        if check_call_exit(row):
+            # 出场Call
+            state["position"] = "none"
             save_last_signal(state)
-            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
-        return time_index_est, "⚠️ Call 出场信号"
 
-    elif current_pos == "put" and check_put_exit(row):
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_call_entry(row):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
+            # 出场后判断是否反手入Put
+            if check_put_entry(row):
+                strength = determine_strength(row, "put")
+                state["position"] = "put"
+                save_last_signal(state)
+                return time_index_est, f"🔁 反手 Put：Call 出场后 Put 入场（{strength}）"
+            return time_index_est, "⚠️ Call 出场信号"
+
+    elif current_pos == "put":
+        # Put仓位，判断出场信号
+        if check_put_exit(row):
+            # 出场Put
+            state["position"] = "none"
             save_last_signal(state)
-            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
-        return time_index_est, "⚠️ Put 出场信号"
+
+            # 出场后判断是否反手入Call
+            if check_call_entry(row):
+                strength = determine_strength(row, "call")
+                state["position"] = "call"
+                save_last_signal(state)
+                return time_index_est, f"🔁 反手 Call：Put 出场后 Call 入场（{strength}）"
+            return time_index_est, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
+        # 空仓时判断进场
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index_est, f"📈 主升浪 Call 入场（{strength}）"
+            return time_index_est, f"📈 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index_est, f"📉 主跌浪 Put 入场（{strength}）"
+            return time_index_est, f"📉 Put 入场（{strength}）"
 
+    # 无信号或状态不变
     return None, None
 
 def send_to_discord(message):
@@ -272,22 +281,24 @@ def send_to_discord(message):
     try:
         requests.post(DISCORD_WEBHOOK_URL, json=payload)
     except Exception as e:
-        print("发送 Discord 失败:", e)
+        print(f"发送 Discord 失败: {e}")
 
 def main():
-    print(f"[DEBUG] 当前工作目录: {os.getcwd()}")
     now = get_est_now()
     try:
+        # 非交易时间跳过
+        if now.time() >= time(20,0) or now.time() < time(4,0):
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 非交易时间，跳过运行")
+            return
+
         df = get_data()
 
+        # 盘前盘后时间提示，正常交易时间才生成信号
         if time(4,0) <= now.time() < time(9,30):
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 盘前数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 盘前数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
             return
         if time(16,0) <= now.time() < time(20,0):
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 盘后数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
-            return
-        if now.time() >= time(20,0) or now.time() < time(4,0):
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🌙 非交易时间，跳过运行")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 盘后数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
             return
 
         time_signal, signal = generate_signal(df)
