@@ -91,7 +91,7 @@ def get_data():
     df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
     df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
     df_filtered = compute_macd(df_filtered)
-    df_filtered.fillna(method='ffill', inplace=True)
+    df_filtered.ffill(inplace=True)
 
     return df_filtered.dropna()
 
