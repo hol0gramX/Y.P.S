@@ -39,37 +39,36 @@ def load_last_signal_from_gist():
         print(f"[DEBUG] 从 Gist 读取持仓状态失败: {e}")
         return {"position": "none"}
 
-def save_last_signal_to_gist(state):
-    if not GIST_TOKEN:
+def save_last_signal(state):
+    token = os.environ.get("GIST_TOKEN")
+    gist_id = "7490de39ccc4e20445ef576832bea34b"  # 改成你的 Gist ID
+
+    if not token:
         print("[DEBUG] GIST_TOKEN 未设置，无法保存持仓状态")
         return
 
-    url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {
-        "Authorization": f"token {GIST_TOKEN}",
-        "Accept": "application/vnd.github+json"
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
     }
-    try:
-        # 先获取 gist 当前内容，防止覆盖其他文件（可选）
-        r = requests.get(url, headers=headers)
-        r.raise_for_status()
-        gist_data = r.json()
 
-        # 更新我们文件的内容
-        gist_data["files"][GIST_FILENAME]["content"] = json.dumps(state)
-
-        # PATCH 更新 gist
-        r2 = requests.patch(url, headers=headers, json={
-            "files": {
-                GIST_FILENAME: {
-                    "content": json.dumps(state)
-                }
+    data = {
+        "files": {
+            "last_signal.json": {
+                "content": json.dumps(state)
             }
-        })
-        r2.raise_for_status()
-        print(f"[DEBUG] 成功保存持仓状态到 Gist: {state}")
+        }
+    }
+
+    url = f"https://api.github.com/gists/{gist_id}"
+    try:
+        response = requests.patch(url, headers=headers, json=data)
+        print(f"[DEBUG] 保存持仓状态到 Gist: {state}")
+        print(f"[DEBUG] Gist 保存响应码: {response.status_code}")
+        if response.status_code != 200:
+            print(f"[ERROR] Gist 保存失败: {response.text}")
     except Exception as e:
-        print(f"[DEBUG] 保存持仓状态到 Gist 失败: {e}")
+        print(f"[ERROR] 保存持仓状态到 Gist 时出错: {e}")
 
 # --------- 持仓状态接口改用 Gist ---------
 def load_last_signal():
