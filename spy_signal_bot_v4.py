@@ -50,7 +50,7 @@ def compute_macd(df):
     return df
 
 def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="2d", progress=False, prepost=True)
+    df = yf.download(SYMBOL, interval="1m", period="2d", progress=False, prepost=True, auto_adjust=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
