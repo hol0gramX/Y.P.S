@@ -34,31 +34,34 @@ def compute_macd(df):
     return df
 
 # -------- 趋势判断 --------
+from datetime import timedelta
+import pandas_ta as ta
+
 def get_latest_5min_trend(df_5min, ts):
     try:
-        subset = df_5min[df_5min.index <= ts]
-        recent = subset[subset.index >= ts - timedelta(hours=2)]
-
-        if recent.empty or len(recent) < 20:
+        recent = df_5min.loc[(df_5min.index <= ts) & (df_5min.index > ts - timedelta(hours=2))]
+        if recent.empty:
             return None
 
-        ma20 = recent['Close'].rolling(20).mean()
-        if pd.isna(ma20.iloc[-1]):
+        macd = ta.macd(recent['Close'])
+        if macd is None or macd.empty:
             return None
 
-        latest_close = recent.iloc[-1]['Close']
-        latest_ma20 = ma20.iloc[-1]
+        macdh = macd['MACDh_12_26_9'].dropna()
+        if macdh.empty or len(macdh) < 5:
+            return None
 
-        if latest_close > latest_ma20:
+        recent_macdh = macdh.iloc[-5:]
+        if (recent_macdh > 0).all():
             return {"trend": "📈上涨"}
-        elif latest_close < latest_ma20:
+        elif (recent_macdh < 0).all():
             return {"trend": "📉下跌"}
         else:
-            return {"trend": "⚖️震荡"}
-
+            return {"trend": "🔁震荡"}
     except Exception as e:
         print(f"[5min趋势判断失败] {e}")
         return None
+
 
 # -------- 信号判断逻辑 --------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
