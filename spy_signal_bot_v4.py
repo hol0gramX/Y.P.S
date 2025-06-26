@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
 import pandas_market_calendars as mcal
+import csv
+from pathlib import Path
 
 # --------- Gist 配置 ---------
 GIST_ID = "7490de39ccc4e20445ef576832bea34b"
@@ -38,6 +40,17 @@ def save_last_signal(state):
     requests.patch(f"https://api.github.com/gists/{GIST_ID}", headers=headers, json=data)
 
 load_last_signal = load_last_signal_from_gist
+
+# --------- 日志记录 ---------
+LOG_FILE = "signal_log.csv"
+
+def log_signal_to_csv(timestamp, signal):
+    file_exists = Path(LOG_FILE).exists()
+    with open(LOG_FILE, mode="a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp", "signal"])
+        writer.writerow([timestamp.isoformat(), signal])
 
 # --------- 时间工具 ---------
 def get_est_now():
@@ -240,16 +253,13 @@ def main():
         print(f"📦 当前仓位状态：{state.get('position', 'none')}")
         print("-" * 60)
 
-        # 收盘后清仓逻辑
         if check_market_closed_and_clear():
             return
 
-        # 非盘中跳过信号检测
         if not is_market_open_now():
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕗 盘前/盘后，不进行信号判断")
             return
 
-        # 获取数据并生成信号
         df = get_data()
         time_signal, signal = generate_signal(df)
 
@@ -257,16 +267,15 @@ def main():
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
+            log_signal_to_csv(time_signal, signal)
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
 
     except Exception as e:
         print("[错误]", e)
 
-
 if __name__ == "__main__":
     main()
-
 
 
 
