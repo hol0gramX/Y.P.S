@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
@@ -14,12 +14,21 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 def get_est_now():
     return datetime.now(tz=ZoneInfo("America/New_York"))
 
-# 修改这里，4:00 ~ 16:00 全时段运行（含盘前盘后）
 def is_market_open():
     now = get_est_now()
-    premarket_start = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-    return premarket_start <= now <= market_close
+    return now.time() >= datetime.strptime("09:30", "%H:%M").time() and now.time() < datetime.strptime("16:00", "%H:%M").time()
+
+def is_premarket():
+    now = get_est_now()
+    return now.time() >= datetime.strptime("04:00", "%H:%M").time() and now.time() < datetime.strptime("09:30", "%H:%M").time()
+
+def is_aftermarket():
+    now = get_est_now()
+    return now.time() >= datetime.strptime("16:00", "%H:%M").time() and now.time() < datetime.strptime("20:00", "%H:%M").time()
+
+def is_outside_trading():
+    now = get_est_now()
+    return now.time() < datetime.strptime("04:00", "%H:%M").time() or now.time() >= datetime.strptime("20:00", "%H:%M").time()
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -40,26 +49,32 @@ def compute_macd(df):
     return df
 
 def get_data():
-    # 注意这里加了 prepost=True，确保盘前盘后数据都获取
-    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False, prepost=True)
+    df = yf.download(SYMBOL, interval="1m", period="2d", progress=False, prepost=True)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
     if df.empty:
         raise ValueError("无法获取数据")
+    
+    df.index = df.index.tz_convert("America/New_York")
 
-    # 打印时间范围，确认数据
-    print(f"数据时间范围: {df.index[0]} ~ {df.index[-1]}")
+    now = get_est_now()
+    today = now.date()
+    yesterday = today - timedelta(days=1)
 
-    # 数据行数检查，防止指标计算失败
-    if len(df) < 20:
-        raise ValueError("数据量不足，无法计算指标")
+    df_filtered = df[
+        ((df.index.date == yesterday) & (df.index.time >= time(16, 0)) & (df.index.time < time(20, 0))) |
+        ((df.index.date == today) & (df.index.time >= time(4, 0)) & (df.index.time < time(16, 0)))
+    ]
 
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
-    return df.dropna()
+    if len(df_filtered) < 30:
+        raise ValueError("数据行数不足，无法计算指标")
+
+    df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
+    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
+    df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
+    df_filtered = compute_macd(df_filtered)
+    return df_filtered.dropna()
 
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
@@ -175,12 +190,18 @@ def send_to_discord(message):
 
 def main():
     now = get_est_now()
-    if not is_market_open():
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❌ 非交易时间，跳过运行")
-        return
-
     try:
+        if is_outside_trading():
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🌙 非交易时间（20:00-04:00），跳过运行")
+            return
+
         df = get_data()
+
+        if is_premarket() or is_aftermarket():
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 {'盘前' if is_premarket() else '盘后'}数据采集完成，数据时间: {df.index[0]} ~ {df.index[-1]}")
+            return
+
+        # 盘中才生成信号
         time_signal, signal = generate_signal(df)
         if signal and time_signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
@@ -193,5 +214,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
