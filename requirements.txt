@@ -1,5 +1,6 @@
 numpy==1.23.5
 pandas
+pandas_market_calendars
 pandas_ta
 yfinance
 requests
