@@ -1,8 +1,6 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-import json
-import os
 
 STATE_FILE = "last_signal_backtest.json"
 SYMBOL = "SPY"
@@ -27,10 +25,10 @@ def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
 def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
+    return float(row['MACD']) > float(row['MACDs'])
 
 def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
+    return float(row['MACD']) < float(row['MACDs'])
 
 def determine_strength(row, direction):
     strength = "中"
@@ -49,16 +47,14 @@ def determine_strength(row, direction):
 def check_call_entry(row):
     return (
         float(row['Close']) > float(row['VWAP']) and
-        float(row['RSI']) > 52 and
-        strong_volume(row) and
+        float(row['RSI']) > 50 and
         macd_trending_up(row)
     )
 
 def check_put_entry(row):
     return (
         float(row['Close']) < float(row['VWAP']) and
-        float(row['RSI']) < 48 and
-        strong_volume(row) and
+        float(row['RSI']) < 50 and
         macd_trending_down(row)
     )
 
@@ -69,21 +65,20 @@ def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
     return {"position": "none"}
 
 def save_last_signal(state):
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
+    pass
 
 def backtest():
     est = "America/New_York"
     df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
@@ -95,38 +90,36 @@ def backtest():
 
     for idx, row in df.iterrows():
         current_pos = state["position"]
-        est_time = idx.tz_localize('UTC').tz_convert(est) if idx.tz is None else idx.tz_convert(est)
+
+        if idx.tz is None:
+            est_time = idx.tz_localize('UTC').tz_convert(est)
+        else:
+            est_time = idx.tz_convert(est)
 
         if current_pos == "call" and check_call_exit(row):
             results.append((est_time, "Call 出场"))
             state["position"] = "none"
-            save_last_signal(state)
             if check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
-                save_last_signal(state)
                 results.append((est_time, f"反手 Put 入场（{strength}）"))
 
         elif current_pos == "put" and check_put_exit(row):
             results.append((est_time, "Put 出场"))
             state["position"] = "none"
-            save_last_signal(state)
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
-                save_last_signal(state)
                 results.append((est_time, f"反手 Call 入场（{strength}）"))
 
         elif current_pos == "none":
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
-                save_last_signal(state)
                 results.append((est_time, f"Call 入场（{strength}）"))
             elif check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
-                save_last_signal(state)
                 results.append((est_time, f"Put 入场（{strength}）"))
 
     for time, signal in results:
