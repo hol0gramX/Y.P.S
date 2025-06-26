@@ -1,6 +1,8 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
+import json
+import os
 
 STATE_FILE = "last_signal_backtest.json"
 SYMBOL = "SPY"
@@ -25,18 +27,10 @@ def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
 def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0.05
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
 
 def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < -0.05
-
-def vwapped_enough(row, direction):
-    price = float(row['Close'])
-    vwap = float(row['VWAP'])
-    if direction == 'call':
-        return (price - vwap) / vwap > 0.001  # 至少高出 0.1%
-    else:
-        return (vwap - price) / vwap > 0.001
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
 
 def determine_strength(row, direction):
     strength = "中"
@@ -54,31 +48,35 @@ def determine_strength(row, direction):
 
 def check_call_entry(row):
     return (
-        row['RSI'] > 52 and
+        float(row['Close']) > float(row['VWAP']) and
+        float(row['RSI']) > 52 and
         strong_volume(row) and
-        macd_trending_up(row) and
-        vwapped_enough(row, 'call')
+        macd_trending_up(row)
     )
 
 def check_put_entry(row):
     return (
-        row['RSI'] < 48 and
+        float(row['Close']) < float(row['VWAP']) and
+        float(row['RSI']) < 48 and
         strong_volume(row) and
-        macd_trending_down(row) and
-        vwapped_enough(row, 'put')
+        macd_trending_down(row)
     )
 
 def check_call_exit(row):
-    return row['RSI'] < 48 or row['MACD'] < row['MACDs']
+    return float(row['RSI']) < 48 and strong_volume(row)
 
 def check_put_exit(row):
-    return row['RSI'] > 52 or row['MACD'] > row['MACDs']
+    return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
     return {"position": "none"}
 
 def save_last_signal(state):
-    pass
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
 
 def backtest():
     est = "America/New_York"
@@ -102,27 +100,33 @@ def backtest():
         if current_pos == "call" and check_call_exit(row):
             results.append((est_time, "Call 出场"))
             state["position"] = "none"
+            save_last_signal(state)
             if check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
+                save_last_signal(state)
                 results.append((est_time, f"反手 Put 入场（{strength}）"))
 
         elif current_pos == "put" and check_put_exit(row):
             results.append((est_time, "Put 出场"))
             state["position"] = "none"
+            save_last_signal(state)
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
+                save_last_signal(state)
                 results.append((est_time, f"反手 Call 入场（{strength}）"))
 
         elif current_pos == "none":
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
+                save_last_signal(state)
                 results.append((est_time, f"Call 入场（{strength}）"))
             elif check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
+                save_last_signal(state)
                 results.append((est_time, f"Put 入场（{strength}）"))
 
     for time, signal in results:
