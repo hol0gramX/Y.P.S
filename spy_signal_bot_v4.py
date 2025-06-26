@@ -224,19 +224,18 @@ def send_to_discord(message):
 def main():
     try:
         df = get_data()
-        print(df.tail(3))  # 调试用
-
         time_signal, signal = generate_signal(df)
         if signal and time_signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
         else:
-            print("无交易信号")
-
+            # 无信号时打印日志，但不发discord
+            now = get_est_now()
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无交易信号")
     except Exception as e:
         print("Error:", e)
-
+        
 if __name__ == "__main__":
     main()
 
