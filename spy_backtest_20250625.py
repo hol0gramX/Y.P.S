@@ -1,113 +1,140 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-from datetime import timedelta
 
-# 参数设置
-symbol = "SPY"
-min_hold = 5  # 最小持仓分钟数
+STATE_FILE = "last_signal_backtest.json"
+SYMBOL = "SPY"
 
-def compute_indicators(df):
-    df['RSI'] = ta.rsi(df['Close'], length=14)
+def compute_rsi(series, length=14):
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    avg_gain = up.rolling(window=length).mean()
+    avg_loss = down.rolling(window=length).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def compute_macd(df):
     macd = ta.macd(df['Close'])
-    df = pd.concat([df, macd], axis=1)
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    return df.dropna()
+    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
+    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
+    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+    return df
 
-def is_strong_volume(row):
-    return row['Volume'] >= row['Vol_MA5']
+def strong_volume(row):
+    return float(row['Volume']) >= float(row['Vol_MA5'])
 
-def macd_trending(df, i, direction):
-    recent = df.iloc[i-3:i]
-    if direction == "up":
-        return (recent['MACD_12_26_9'] > recent['MACDs_12_26_9']).all() and (recent['MACDh_12_26_9'] > 0).all()
-    elif direction == "down":
-        return (recent['MACD_12_26_9'] < recent['MACDs_12_26_9']).all() and (recent['MACDh_12_26_9'] < 0).all()
-    return False
+def macd_trending_up(row):
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
+
+def macd_trending_down(row):
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
 
 def determine_strength(row, direction):
+    strength = "中"
     if direction == "call":
-        if row['RSI'] > 65 and row['MACDh_12_26_9'] > 0.5:
-            return "强"
-        elif row['RSI'] < 55:
-            return "弱"
+        if float(row['RSI']) > 65 and float(row['MACDh']) > 0.5:
+            strength = "强"
+        elif float(row['RSI']) < 55:
+            strength = "弱"
     elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh_12_26_9'] < -0.5:
-            return "强"
-        elif row['RSI'] > 45:
-            return "弱"
-    return "中"
+        if float(row['RSI']) < 35 and float(row['MACDh']) < -0.5:
+            strength = "强"
+        elif float(row['RSI']) > 45:
+            strength = "弱"
+    return strength
 
-def backtest(df):
-    position = "none"
-    entry_time = None
-    logs = []
+def allow_trade(row, ema_fast, ema_slow):
+    high_window = row['High_Max10']
+    low_window = row['Low_Min10']
+    range_percent = (high_window - low_window) / low_window
+    ema_converged = abs(ema_fast - ema_slow) < 0.1
+    return range_percent >= 0.006 and not ema_converged
 
-    for i in range(5, len(df)):
-        row = df.iloc[i]
-        now = row.name
+def check_call_entry(row):
+    price_dislocation = (row['Close'] - row['EMA9']) / row['EMA9']
+    cond1 = row['Close'] > row['VWAP'] and row['RSI'] > 52 and strong_volume(row) and macd_trending_up(row)
+    cond2 = price_dislocation > 0.01 and row['EMA9'] > row['EMA21']
+    cond3 = row['MACDh'] > row['MACDh_prev'] and row['RSI'] < 35 and row['EMA9'] > row['EMA21']
+    return (cond1 or cond2 or cond3) and allow_trade(row, row['EMA9'], row['EMA21'])
 
-        can_exit = entry_time is not None and (now - entry_time) >= timedelta(minutes=min_hold)
+def check_put_entry(row):
+    price_dislocation = (row['Close'] - row['EMA9']) / row['EMA9']
+    cond1 = row['Close'] < row['VWAP'] and row['RSI'] < 48 and strong_volume(row) and macd_trending_down(row)
+    cond2 = price_dislocation < -0.01 and row['EMA9'] < row['EMA21']
+    cond3 = row['MACDh'] < row['MACDh_prev'] and row['RSI'] > 65 and row['EMA9'] < row['EMA21']
+    return (cond1 or cond2 or cond3) and allow_trade(row, row['EMA9'], row['EMA21'])
 
-        if position == "call":
-            exit_signal = row['RSI'] < 48 and is_strong_volume(row) and not macd_trending(df, i, "up") and can_exit
-            if exit_signal:
-                logs.append(f"[{now}] ⚠️ Call 出场信号")
-                position = "none"
-                entry_time = None
-                # check反手 Put
-                if (
-                    row['Close'] < row['VWAP'] and row['RSI'] < 50 and is_strong_volume(row)
-                    and macd_trending(df, i, "down")
-                ):
-                    strength = determine_strength(row, "put")
-                    logs.append(f"[{now}] 🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）")
-                    position = "put"
-                    entry_time = now
-                continue
+def check_call_exit(row):
+    return (row['RSI'] < 55 or row['MACDh'] < row['MACDh_prev']) and strong_volume(row)
 
-        elif position == "put":
-            exit_signal = row['RSI'] > 52 and is_strong_volume(row) and not macd_trending(df, i, "down") and can_exit
-            if exit_signal:
-                logs.append(f"[{now}] ⚠️ Put 出场信号")
-                position = "none"
-                entry_time = None
-                # check反手 Call
-                if (
-                    row['Close'] > row['VWAP'] and row['RSI'] > 50 and is_strong_volume(row)
-                    and macd_trending(df, i, "up")
-                ):
-                    strength = determine_strength(row, "call")
-                    logs.append(f"[{now}] 🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）")
-                    position = "call"
-                    entry_time = now
-                continue
+def check_put_exit(row):
+    return (row['RSI'] > 45 or row['MACDh'] > row['MACDh_prev']) and strong_volume(row)
 
-        if position == "none":
-            if (
-                row['Close'] > row['VWAP'] and row['RSI'] > 50 and is_strong_volume(row)
-                and macd_trending(df, i, "up")
-            ):
-                strength = determine_strength(row, "call")
-                logs.append(f"[{now}] 📈 主升浪 Call 入场（{strength}）")
-                position = "call"
-                entry_time = now
-            elif (
-                row['Close'] < row['VWAP'] and row['RSI'] < 50 and is_strong_volume(row)
-                and macd_trending(df, i, "down")
-            ):
+def load_last_signal():
+    return {"position": "none"}
+
+def save_last_signal(state):
+    pass
+
+def backtest():
+    est = "America/New_York"
+    df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df['EMA9'] = ta.ema(df['Close'], 9)
+    df['EMA21'] = ta.ema(df['Close'], 21)
+    df['High_Max10'] = df['High'].rolling(10).max()
+    df['Low_Min10'] = df['Low'].rolling(10).min()
+    df = compute_macd(df)
+    df['MACDh_prev'] = df['MACDh'].shift(1)
+    df = df.dropna()
+
+    state = load_last_signal()
+    results = []
+
+    for idx, row in df.iterrows():
+        current_pos = state["position"]
+
+        if idx.tz is None:
+            est_time = idx.tz_localize('UTC').tz_convert(est)
+        else:
+            est_time = idx.tz_convert(est)
+
+        if current_pos == "call" and check_call_exit(row):
+            results.append((est_time, "Call 出场"))
+            state["position"] = "none"
+            if check_put_entry(row):
                 strength = determine_strength(row, "put")
-                logs.append(f"[{now}] 📉 主跌浪 Put 入场（{strength}）")
-                position = "put"
-                entry_time = now
+                state["position"] = "put"
+                results.append((est_time, f"反手 Put 入场（{strength}）"))
 
-    return logs
+        elif current_pos == "put" and check_put_exit(row):
+            results.append((est_time, "Put 出场"))
+            state["position"] = "none"
+            if check_call_entry(row):
+                strength = determine_strength(row, "call")
+                state["position"] = "call"
+                results.append((est_time, f"反手 Call 入场（{strength}）"))
+
+        elif current_pos == "none":
+            if check_call_entry(row):
+                strength = determine_strength(row, "call")
+                state["position"] = "call"
+                results.append((est_time, f"Call 入场（{strength}）"))
+            elif check_put_entry(row):
+                strength = determine_strength(row, "put")
+                state["position"] = "put"
+                results.append((est_time, f"Put 入场（{strength}）"))
+
+    for time, signal in results:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
 if __name__ == "__main__":
-    df = yf.download("SPY", interval="1m", start="2025-06-25", end="2025-06-26", progress=False, auto_adjust=False)
-    df = compute_indicators(df)
-    signals = backtest(df)
-    for s in signals:
-        print(s)
-
+    backtest()
