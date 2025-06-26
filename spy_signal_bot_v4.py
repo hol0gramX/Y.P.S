@@ -21,12 +21,15 @@ LOG_FILE = "signal_log.csv"
 
 # --------- 日志 ---------
 def log_signal_to_csv(timestamp, signal):
-    file_exists = Path(LOG_FILE).exists()
-    with open(LOG_FILE, mode="a", newline="") as f:
+    date_str = timestamp.strftime("%Y-%m-%d")
+    file_name = f"signal_log_{date_str}.csv"
+    file_exists = Path(file_name).exists()
+    with open(file_name, mode="a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
             writer.writerow(["timestamp", "signal"])
         writer.writerow([timestamp.isoformat(), signal])
+
 
 # --------- Gist 状态管理 ---------
 def load_last_signal_from_gist():
