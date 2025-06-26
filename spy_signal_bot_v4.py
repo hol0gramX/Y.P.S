@@ -108,14 +108,135 @@ def get_data():
     df.ffill(inplace=True)
     return df.dropna()
 
+# 信号判断相关函数（保持你原版逻辑，完全不改）
+def strong_volume(row):
+    return float(row['Volume']) >= float(row['Vol_MA5'])
+
+def macd_trending_up(row):
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
+
+def macd_trending_down(row):
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
+
+def determine_strength(row, direction):
+    strength = "中"
+    if direction == "call":
+        if float(row['RSI']) > 65 and float(row['MACDh']) > 0.5:
+            strength = "强"
+        elif float(row['RSI']) < 55:
+            strength = "弱"
+    elif direction == "put":
+        if float(row['RSI']) < 35 and float(row['MACDh']) < -0.5:
+            strength = "强"
+        elif float(row['RSI']) > 45:
+            strength = "弱"
+    return strength
+
+def check_call_entry(row):
+    return (
+        float(row['Close']) > float(row['VWAP']) and
+        float(row['RSI']) > 52 and
+        strong_volume(row) and
+        macd_trending_up(row)
+    )
+
+def check_put_entry(row):
+    return (
+        float(row['Close']) < float(row['VWAP']) and
+        float(row['RSI']) < 48 and
+        strong_volume(row) and
+        macd_trending_down(row)
+    )
+
+def check_call_exit(row):
+    return float(row['RSI']) < 48 and strong_volume(row)
+
+def check_put_exit(row):
+    return float(row['RSI']) > 52 and strong_volume(row)
+
+def load_last_signal():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"position": "none"}
+
+def save_last_signal(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+def generate_signal(df):
+    if len(df) < 6:
+        return None, None
+
+    row = df.iloc[-1]
+    state = load_last_signal()
+    current_pos = state.get("position", "none")
+
+    time_index = row.name
+    if time_index.tzinfo is None:
+        time_index = time_index.tz_localize("UTC")
+    time_index_est = time_index.tz_convert(EST)
+
+    if current_pos == "call" and check_call_exit(row):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_put_entry(row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+        return time_index_est, "⚠️ Call 出场信号"
+
+    elif current_pos == "put" and check_put_exit(row):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+        return time_index_est, "⚠️ Put 出场信号"
+
+    elif current_pos == "none":
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return time_index_est, f"📈 主升浪 Call 入场（{strength}）"
+        elif check_put_entry(row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return time_index_est, f"📉 主跌浪 Put 入场（{strength}）"
+
+    return None, None
+
+def send_to_discord(message):
+    if not DISCORD_WEBHOOK_URL:
+        print("DISCORD_WEBHOOK_URL 未设置，消息不发送")
+        return
+    payload = {"content": message}
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    except Exception as e:
+        print("发送 Discord 失败:", e)
+
 def main():
     try:
         df = get_data()
-        print(df.tail(3))
+        print(df.tail(3))  # 调试用
+
+        time_signal, signal = generate_signal(df)
+        if signal and time_signal:
+            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
+            print(msg)
+            send_to_discord(msg)
+        else:
+            print("无交易信号")
+
     except Exception as e:
         print("Error:", e)
 
 if __name__ == "__main__":
     main()
-
 
