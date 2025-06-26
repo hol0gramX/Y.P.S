@@ -9,9 +9,9 @@ import pandas_ta as ta
 import pandas_market_calendars as mcal
 
 # --------- Gist 相关配置 ---------
-GIST_ID = "7490de39ccc4e20445ef576832bea34b"  # 你的 Gist ID
+GIST_ID = "7490de39ccc4e20445ef576832bea34b"
 GIST_FILENAME = "last_signal.json"
-GIST_TOKEN = os.environ.get("GIST_TOKEN")  # 你在 GitHub Secret 里设置的 TOKEN_GIST 需要改成 GIST_TOKEN
+GIST_TOKEN = os.environ.get("GIST_TOKEN")
 
 # --------- 常规变量 ---------
 SYMBOL = "SPY"
@@ -40,27 +40,24 @@ def load_last_signal_from_gist():
         return {"position": "none"}
 
 def save_last_signal(state):
-    token = os.environ.get("GIST_TOKEN")
-    gist_id = "7490de39ccc4e20445ef576832bea34b"  # 改成你的 Gist ID
-
-    if not token:
+    if not GIST_TOKEN:
         print("[DEBUG] GIST_TOKEN 未设置，无法保存持仓状态")
         return
 
     headers = {
-        "Authorization": f"token {token}",
+        "Authorization": f"token {GIST_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
     }
 
     data = {
         "files": {
-            "last_signal.json": {
+            GIST_FILENAME: {
                 "content": json.dumps(state)
             }
         }
     }
 
-    url = f"https://api.github.com/gists/{gist_id}"
+    url = f"https://api.github.com/gists/{GIST_ID}"
     try:
         response = requests.patch(url, headers=headers, json=data)
         print(f"[DEBUG] 保存持仓状态到 Gist: {state}")
@@ -70,15 +67,10 @@ def save_last_signal(state):
     except Exception as e:
         print(f"[ERROR] 保存持仓状态到 Gist 时出错: {e}")
 
-# --------- 持仓状态接口改用 Gist ---------
-def load_last_signal():
-    return load_last_signal_from_gist()
+# --------- 设置读取函数别名 ---------
+load_last_signal = load_last_signal_from_gist
 
-def save_last_signal(state):
-    save_last_signal_to_gist(state)
-
-# --------- 下面是你原来的业务逻辑代码 ---------
-
+# --------- 数据与信号处理逻辑 ---------
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -143,7 +135,7 @@ def get_data():
     df.index = df.index.tz_localize('UTC').tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
 
     mask = pd.Series(False, index=df.index)
-    for op,cl,early in sessions:
+    for op, cl, early in sessions:
         pm_start = None if early else cl
         pm_end = None if early else cl + timedelta(hours=4)
         intervals = [
@@ -152,15 +144,15 @@ def get_data():
         ]
         if pm_start:
             intervals.append((pm_start, pm_end))
-        for s,e in intervals:
+        for s, e in intervals:
             mask |= (df.index >= s) & (df.index < e)
     df = df[mask]
-    if len(df)<30:
+    if len(df) < 30:
         raise ValueError("过滤后数据不足")
 
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
-    df['VWAP'] = (df['Close']*df['Volume']).cumsum() / df['Volume'].cumsum()
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
     df.ffill(inplace=True)
     return df.dropna()
@@ -270,7 +262,7 @@ def send_to_discord(message):
 def main():
     print(f"[DEBUG] 当前工作目录: {os.getcwd()}")
     state = load_last_signal()
-    print(f"[DEBUG] 程序启动时仓位状态: {state.get('position','none')}")
+    print(f"[DEBUG] 程序启动时仓位状态: {state.get('position', 'none')}")
     try:
         df = get_data()
         time_signal, signal = generate_signal(df)
