@@ -45,6 +45,21 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
+def get_5min_trend():
+    now = get_est_now()
+    start = now - timedelta(days=3)
+    df = yf.download(SYMBOL, interval="5m", start=start, end=now, progress=False, prepost=True, auto_adjust=True)
+    if df.empty:
+        return "趋势：无数据"
+    df.index = df.index.tz_convert(EST) if df.index.tz is not None else df.index.tz_localize("UTC").tz_convert(EST)
+    recent = df.last("2h")
+    macd = ta.macd(recent['Close'])
+    if macd['MACD_12_26_9'].iloc[-1] > 0 and macd['MACDh_12_26_9'].iloc[-1] > 0:
+        return "趋势：Bullish"
+    elif macd['MACD_12_26_9'].iloc[-1] < 0 and macd['MACDh_12_26_9'].iloc[-1] < 0:
+        return "趋势：Bearish"
+    return "趋势：震荡"
+
 # ========= 数据获取 =========
 def get_data():
     now = get_est_now()
@@ -60,14 +75,13 @@ def get_data():
         sessions.append((op, cl, early))
 
     start_dt = sessions[0][0]
-    end_dt = sessions[-1][1] + timedelta(seconds=1)  # 增加1秒避免截断
+    end_dt = sessions[-1][1] + timedelta(seconds=1)
 
     print(f"[DEBUG] 下载数据：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
     df = yf.download(SYMBOL, interval="1m", start=start_dt.tz_convert('UTC'), end=end_dt.tz_convert('UTC'), progress=False, prepost=True, auto_adjust=True)
     if df.empty: raise ValueError("下载失败或数据为空")
 
-    # --------- 🧩 扁平化列名 ---------
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
@@ -75,7 +89,6 @@ def get_data():
     df = df[df['Volume'] > 0]
     df.index = df.index.tz_convert(EST) if df.index.tz is not None else df.index.tz_localize('UTC').tz_convert(EST)
 
-    # --------- 筛选交易时段 ---------
     mask = pd.Series(False, index=df.index)
     for op, cl, early in sessions:
         intervals = [(op - timedelta(hours=5, minutes=30), op), (op, cl)]
@@ -127,6 +140,7 @@ def main():
     print(f"[🔁 回测开始] {get_est_now().isoformat()}")
     try:
         df = get_data()
+        trend_tag = get_5min_trend()
         state = load_last_signal()
         signals = []
 
@@ -141,55 +155,42 @@ def main():
                 if check_put_entry(row):
                     strength = determine_strength(row, "put")
                     state["position"] = "put"
-                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）｜{trend_tag}"
                 else:
-                    signal = "⚠️ Call 出场信号"
+                    signal = f"⚠️ Call 出场信号"
 
             elif state["position"] == "put" and check_put_exit(row):
                 state["position"] = "none"
                 if check_call_entry(row):
                     strength = determine_strength(row, "call")
                     state["position"] = "call"
-                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）｜{trend_tag}"
                 else:
-                    signal = "⚠️ Put 出场信号"
+                    signal = f"⚠️ Put 出场信号"
 
             elif state["position"] == "none":
                 if check_call_entry(row):
                     strength = determine_strength(row, "call")
                     state["position"] = "call"
-                    signal = f"📈 主升浪 Call 入场（{strength}）"
+                    signal = f"📈 主升浪 Call 入场（{strength}）｜{trend_tag}"
                 elif check_put_entry(row):
                     strength = determine_strength(row, "put")
                     state["position"] = "put"
-                    signal = f"📉 主跌浪 Put 入场（{strength}）"
+                    signal = f"📉 主跌浪 Put 入场（{strength}）｜{trend_tag}"
 
             if signal:
                 signals.append(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
                 save_last_signal(state)
 
-                ...
         if not signals:
             print("[信息] 今日无信号生成")
         else:
             print("\n".join(signals))
 
-        # ✅ 补丁：收盘清仓逻辑
-        last_dt = df.index[-1]
-        last_date = last_dt.date()
-        sch = nasdaq.schedule(start_date=last_date, end_date=last_date)
-        if not sch.empty:
-            close_time = sch.iloc[0]['market_close'].tz_convert(EST)
-            if df.index[-1] >= close_time:
-                if state.get("position", "none") != "none":
-                    print(f"[{close_time.strftime('%Y-%m-%d %H:%M')}] 🛑 收盘清仓")
-                    state["position"] = "none"
-                    save_last_signal(state)
-
     except Exception as e:
         print(f"[❌ 回测失败] {e}")
 
-
 if __name__ == "__main__":
     main()
+
 
