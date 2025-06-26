@@ -20,6 +20,16 @@ SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
+LOG_FILE = "signal_log.csv"
+
+# --------- 日志函数 ---------
+def log_signal_to_csv(timestamp, signal):
+    file_exists = Path(LOG_FILE).exists()
+    with open(LOG_FILE, mode="a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp", "signal"])
+        writer.writerow([timestamp.isoformat(), signal])
 
 # --------- Gist 状态管理 ---------
 def load_last_signal_from_gist():
@@ -40,17 +50,6 @@ def save_last_signal(state):
     requests.patch(f"https://api.github.com/gists/{GIST_ID}", headers=headers, json=data)
 
 load_last_signal = load_last_signal_from_gist
-
-# --------- 日志记录 ---------
-LOG_FILE = "signal_log.csv"
-
-def log_signal_to_csv(timestamp, signal):
-    file_exists = Path(LOG_FILE).exists()
-    with open(LOG_FILE, mode="a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["timestamp", "signal"])
-        writer.writerow([timestamp.isoformat(), signal])
 
 # --------- 时间工具 ---------
 def get_est_now():
@@ -145,9 +144,6 @@ def get_data():
 
 # --------- 判断函数 ---------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
-def macd_trending_up(row): return row['MACD'] > row['MACDs'] and row['MACDh'] > 0
-def macd_trending_down(row): return row['MACD'] < row['MACDs'] and row['MACDh'] < 0
-
 def determine_strength(row, direction):
     if direction == "call":
         if row['RSI'] > 65 and row['MACDh'] > 0.5: return "强"
@@ -161,17 +157,16 @@ def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 50
 def check_put_entry(row): return row['Close'] < row['VWAP'] and row['RSI'] < 51 and row['MACDh'] < 0.15 and strong_volume(row)
 def check_call_exit(row): return row['RSI'] < 48 and strong_volume(row)
 def check_put_exit(row): return row['RSI'] > 52 and strong_volume(row)
+def allow_call_reentry(row, prev): return prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row)
+def allow_put_reentry(row, prev): return prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row)
 
-def allow_call_reentry(row, prev_row): return prev_row['Close'] < prev_row['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row)
-def allow_put_reentry(row, prev_row): return prev_row['Close'] > prev_row['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row)
-
+# --------- 收盘清仓 ---------
 def check_market_closed_and_clear():
     now = get_est_now()
     today = now.date()
     sch = nasdaq.schedule(start_date=today, end_date=today)
     if sch.empty:
         return False
-
     close_time = sch.iloc[0]['market_close'].tz_convert(EST)
     if now > close_time + timedelta(minutes=1):
         state = load_last_signal()
@@ -276,3 +271,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
