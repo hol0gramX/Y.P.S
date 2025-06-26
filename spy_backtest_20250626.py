@@ -2,18 +2,18 @@ import os
 import json
 import pandas as pd
 import yfinance as yf
-import pandas_ta as ta
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_ta as ta
 import pandas_market_calendars as mcal
 
-# ========= 配置区域 =========
-STATE_FILE = os.path.abspath("last_signal.json")
+# ========= 配置 =========
 SYMBOL = "SPY"
+STATE_FILE = os.path.abspath("last_signal.json")
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========= 时间工具 =========
+# ========= 时间相关 =========
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -27,7 +27,7 @@ def get_market_open_close(d):
 
 def is_early_close(d):
     sch = nasdaq.schedule(start_date=d, end_date=d)
-    return not sch.empty and sch.iloc[0]['market_close'].tz_convert(EST) < pd.Timestamp.combine(d, time(16, 0)).tz_localize(EST)
+    return not sch.empty and sch.iloc[0]['market_close'].tz_convert(EST).hour < 16
 
 # ========= 技术指标 =========
 def compute_rsi(s, length=14):
@@ -44,25 +44,27 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-def get_5min_trend():
-    df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False)
-    df_5min = compute_macd(df_5min)
-    last = df_5min.iloc[-1]
-    if last['MACDh'] > 0.1:
-        return "up"
-    elif last['MACDh'] < -0.1:
-        return "down"
+# ========= 趋势判断（5min） =========
+def get_latest_5min_trend(df_5min, ts):
+    recent = df_5min.loc[df_5min.index <= ts].last("2h")
+    if len(recent) < 10:
+        return None
+    ma20 = recent['Close'].rolling(20).mean()
+    latest = recent.iloc[-1]['Close']
+    if latest > ma20.iloc[-1]:
+        return {"trend": "📈上涨"}
+    elif latest < ma20.iloc[-1]:
+        return {"trend": "📉下跌"}
     else:
-        return "neutral"
+        return {"trend": "⚖️震荡"}
 
-# ========= 数据获取 =========
+# ========= 数据加载 =========
 def get_data():
     now = get_est_now()
     today = now.date()
-    trade_days = get_trading_days(today - timedelta(days=7), today)
-    if len(trade_days) < 2:
-        raise ValueError("可用交易日不足 2 天")
-    recent = trade_days[-2:]
+    trade_days = get_trading_days(today - timedelta(days=14), today)
+    trade_days = trade_days[trade_days <= pd.Timestamp(today)]
+    recent = trade_days[-3:]
 
     sessions = []
     for d in recent:
@@ -70,18 +72,18 @@ def get_data():
         early = is_early_close(d.date())
         sessions.append((op, cl, early))
 
-    start_dt = sessions[0][0] - timedelta(hours=5, minutes=30)
-    end_dt = sessions[-1][1] + timedelta(hours=4)
+    start_dt = sessions[0][0]
+    end_dt = sessions[-1][1] + timedelta(seconds=1)
 
     print(f"[DEBUG] 下载数据：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    df = yf.download(SYMBOL, interval="1m", start=start_dt.tz_convert('UTC'), end=end_dt.tz_convert('UTC'), progress=False, prepost=True, auto_adjust=True)
+    df = yf.download(SYMBOL, interval="1m", start=start_dt.tz_convert('UTC'), end=end_dt.tz_convert('UTC'),
+                     progress=False, prepost=True, auto_adjust=True)
     if df.empty: raise ValueError("下载失败或数据为空")
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-
-    df = df.dropna(subset=['High','Low','Close','Volume'])
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
     df = df[df['Volume'] > 0]
     df.index = df.index.tz_convert(EST) if df.index.tz is not None else df.index.tz_localize('UTC').tz_convert(EST)
 
@@ -102,7 +104,7 @@ def get_data():
     df.ffill(inplace=True)
     return df.dropna()
 
-# ========= 信号判断逻辑 =========
+# ========= 信号逻辑 =========
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
 
 def determine_strength(row, direction):
@@ -131,48 +133,54 @@ def save_last_signal(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-# ========= 主流程 =========
+# ========= 主回测流程 =========
 def main():
     print(f"[🔁 回测开始] {get_est_now().isoformat()}")
     try:
         df = get_data()
-        trend_5min = get_5min_trend()
+        df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False, auto_adjust=True)
+        if df_5min.empty:
+            raise ValueError("5分钟数据为空，无法判断趋势")
+        df_5min.index = df_5min.index.tz_localize("UTC").tz_convert(EST) if df_5min.index.tz is None else df_5min.index.tz_convert(EST)
+
         state = load_last_signal()
         signals = []
 
         for i in range(1, len(df)):
             row = df.iloc[i]
-            prev = df.iloc[i-1]
             time_est = row.name
             signal = None
+
+            trend_info = get_latest_5min_trend(df_5min, time_est)
+            trend_label = f"{trend_info['trend']}（5min）" if trend_info else "未知"
 
             if state["position"] == "call" and check_call_exit(row):
                 state["position"] = "none"
                 if check_put_entry(row):
                     strength = determine_strength(row, "put")
                     state["position"] = "put"
-                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}，5min趋势：{trend_5min}）"
+                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}，趋势：{trend_label}）"
                 else:
-                    signal = f"⚠️ Call 出场信号（5min趋势：{trend_5min}）"
+                    signal = f"⚠️ Call 出场信号（趋势：{trend_label}）"
 
             elif state["position"] == "put" and check_put_exit(row):
                 state["position"] = "none"
                 if check_call_entry(row):
                     strength = determine_strength(row, "call")
                     state["position"] = "call"
-                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}，5min趋势：{trend_5min}）"
+                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}，趋势：{trend_label}）"
                 else:
-                    signal = f"⚠️ Put 出场信号（5min趋势：{trend_5min}）"
+                    signal = f"⚠️ Put 出场信号（趋势：{trend_label}）"
 
             elif state["position"] == "none":
                 if check_call_entry(row):
                     strength = determine_strength(row, "call")
                     state["position"] = "call"
-                    signal = f"📈 主升浪 Call 入场（{strength}，5min趋势：{trend_5min}）"
+                    signal = f"📈 主升浪 Call 入场（{strength}，趋势：{trend_label}）"
                 elif check_put_entry(row):
                     strength = determine_strength(row, "put")
                     state["position"] = "put"
-                    signal = f"📉 主跌浪 Put 入场（{strength}，5min趋势：{trend_5min}）"
+                    signal = f"📉 主跌浪 Put 入场（{strength}，趋势：{trend_label}）"
 
             if signal:
                 signals.append(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
