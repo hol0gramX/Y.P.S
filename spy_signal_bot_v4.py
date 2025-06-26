@@ -70,9 +70,12 @@ def get_data():
     start_search = today - timedelta(days=14)
     trading_days = get_trading_days(start_search, today)
     trading_days = trading_days[trading_days <= pd.Timestamp(today)]
+    print(f"交易日列表（最近14天内）: {trading_days}")
+
     if len(trading_days) < 3:
         raise ValueError("最近交易日不足3个")
     recent_3_days = trading_days[-3:]
+    print(f"最近3个交易日: {recent_3_days}")
 
     sessions = []
     for d in recent_3_days:
@@ -80,13 +83,87 @@ def get_data():
         early = is_early_close(d.date())
         if o is None or c is None:
             raise ValueError(f"{d.date()}无交易时段")
-        sessions.append({'date': d.date(), 'open': o, 'close': c, 'early_close': early})
+        print(f"{d.date()} - 开盘: {o}, 收盘: {c}, 是否早收盘: {early}")
+        sessions.append({'date': d.date(), 'open': o.replace(microsecond=0), 'close': c.replace(microsecond=0), 'early_close': early})
 
     start_dt = sessions[0]['open']
     end_dt = sessions[-1]['close']
 
-    yf_start = start_dt.tz_convert('UTC').replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
-    yf_end = (end_dt + timedelta(seconds=1)).tz_convert('UTC').replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+    print(f"数据抓取区间(EST): {start_dt} - {end_dt}")
+
+    yf_start = start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
+    yf_end = (end_dt + timedelta(seconds=1)).tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
+    print(f"yf下载时间区间(UTC): {yf_start} - {yf_end}")
+
+    df = yf.download(
+        SYMBOL,
+        interval="1m",
+        start=yf_start,
+        end=yf_end,
+        progress=False,
+        prepost=True,
+        auto_adjust=True
+    )
+
+    print(f"下载数据行数: {len(df)}")
+    if df.empty:
+        raise ValueError("下载的数据为空")
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+    df = df[df['Volume'] > 0]
+
+    if df.index.tz is None:
+        df.index = df.index.tz_localize('UTC').tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
+
+    valid_mask = pd.Series(False, index=df.index)
+    for sess in sessions:
+        open_time = sess['open']
+        close_time = sess['close']
+        early_close = sess['early_close']
+
+        pre_market_start = open_time - timedelta(hours=5, minutes=30)
+        pre_market_end = open_time
+
+        market_start = open_time
+        market_end = close_time
+
+        if early_close:
+            post_market_start = None
+            post_market_end = None
+        else:
+            post_market_start = close_time
+            post_market_end = close_time + timedelta(hours=4)
+
+        mask = (
+            ((df.index >= pre_market_start) & (df.index < pre_market_end)) |
+            ((df.index >= market_start) & (df.index < market_end))
+        )
+        if post_market_start and post_market_end:
+            mask = mask | ((df.index >= post_market_start) & (df.index < post_market_end))
+
+        valid_mask = valid_mask | mask
+
+        print(f"{sess['date']} 过滤后行数: {mask.sum()}")
+
+    df_filtered = df[valid_mask].copy()
+    print(f"过滤后数据行数: {len(df_filtered)}")
+
+    if len(df_filtered) < 30:
+        raise ValueError("数据行数不足，无法计算指标")
+
+    df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
+    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14)
+    df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
+    df_filtered = compute_macd(df_filtered)
+    df_filtered.ffill(inplace=True)
+
+    return df_filtered.dropna()
+
 
     df = yf.download(
         SYMBOL,
