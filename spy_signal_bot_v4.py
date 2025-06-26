@@ -14,90 +14,78 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 def get_est_now():
     return datetime.now(tz=ZoneInfo("America/New_York"))
 
-def compute_rsi(series, length=14):
-    delta = series.diff()
-    up = delta.clip(lower=0)
-    down = -1 * delta.clip(upper=0)
-    avg_gain = up.rolling(window=length).mean()
-    avg_loss = down.rolling(window=length).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def compute_macd(df):
-    macd = ta.macd(df['Close'])
-    if macd is None or macd.isna().all().any():
-        raise ValueError("MACD计算失败，结果为空或字段缺失")
-    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
-    return df
-
-def get_data():
-    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-    if df.empty:
-        raise ValueError("无法获取数据")
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
+def compute_indicators(df):
+    df['RSI_6'] = ta.rsi(df['Close'], length=6).fillna(50)
+    df['MACD'] = ta.macd(df['Close'])['MACD_12_26_9'].fillna(0)
+    df['MACDs'] = ta.macd(df['Close'])['MACDs_12_26_9'].fillna(0)
+    df['MACDh'] = ta.macd(df['Close'])['MACDh_12_26_9'].fillna(0)
+    df['MACDh_slope'] = df['MACDh'].diff().fillna(0)
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14).fillna(method='bfill')
+    df['Bar_Size'] = (df['High'] - df['Low']).fillna(0)
+    df['Bar_Body'] = (df['Close'] - df['Open']).abs().fillna(0)
+    df['Body_MA5'] = df['Bar_Body'].rolling(5).mean().fillna(0.01)
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean().fillna(1)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
+    df['Prev_High'] = df['High'].shift(1).fillna(method='bfill')
+    df['Prev_Low'] = df['Low'].shift(1).fillna(method='bfill')
     return df.dropna()
 
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
-def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
+def trending_up(row):
+    return row['MACD'] > row['MACDs'] and row['MACDh'] > 0 and row['MACDh_slope'] > 0
 
-def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
+def trending_down(row):
+    return row['MACD'] < row['MACDs'] and row['MACDh'] < 0 and row['MACDh_slope'] < 0
 
-def determine_strength(row, direction):
-    strength = "中"
-    if direction == "call":
-        if float(row['RSI']) > 65 and float(row['MACDh']) > 0.5:
-            strength = "强"
-        elif float(row['RSI']) < 55:
-            strength = "弱"
-    elif direction == "put":
-        if float(row['RSI']) < 35 and float(row['MACDh']) < -0.5:
-            strength = "强"
-        elif float(row['RSI']) > 45:
-            strength = "弱"
-    return strength
+def valid_candle(row):
+    return row['Bar_Body'] > row['Body_MA5'] * 0.8
+
+def not_choppy(row):
+    return row['ATR'] > 0.15
 
 def check_call_entry(row):
     return (
-        float(row['Close']) > float(row['VWAP']) and
-        float(row['RSI']) > 52 and
+        row['Close'] > row['VWAP'] and
+        row['RSI_6'] > 52 and
         strong_volume(row) and
-        macd_trending_up(row)
+        trending_up(row) and
+        valid_candle(row) and
+        row['Close'] > row['Prev_High'] and
+        not_choppy(row)
     )
 
 def check_put_entry(row):
     return (
-        float(row['Close']) < float(row['VWAP']) and
-        float(row['RSI']) < 48 and
+        row['Close'] < row['VWAP'] and
+        row['RSI_6'] < 48 and
         strong_volume(row) and
-        macd_trending_down(row)
+        trending_down(row) and
+        valid_candle(row) and
+        row['Close'] < row['Prev_Low'] and
+        not_choppy(row)
     )
 
 def check_call_exit(row):
-    return float(row['RSI']) < 48 and strong_volume(row)
+    return row['RSI_6'] < 48 and strong_volume(row)
 
 def check_put_exit(row):
-    return float(row['RSI']) > 52 and strong_volume(row)
+    return row['RSI_6'] > 52 and strong_volume(row)
 
-def check_pre_call(row):
-    return float(row['RSI']) > 50 and macd_trending_up(row)
-
-def check_pre_put(row):
-    return float(row['RSI']) < 50 and macd_trending_down(row)
-
-def is_choppy(row):
-    return abs(float(row['MACDh'])) < 0.1 and 45 < float(row['RSI']) < 55
+def determine_strength(row, direction):
+    strength = "中"
+    if direction == "call":
+        if row['RSI_6'] > 65 and row['MACDh'] > 0.5:
+            strength = "强"
+        elif row['RSI_6'] < 55:
+            strength = "弱"
+    elif direction == "put":
+        if row['RSI_6'] < 35 and row['MACDh'] < -0.5:
+            strength = "强"
+        elif row['RSI_6'] > 45:
+            strength = "弱"
+    return strength
 
 def load_last_signal():
     if os.path.exists(STATE_FILE):
@@ -120,9 +108,6 @@ def generate_signal(df):
     if time_index.tzinfo is None:
         time_index = time_index.tz_localize("UTC")
     time_index_est = time_index.tz_convert(ZoneInfo("America/New_York"))
-
-    if is_choppy(row):
-        return time_index_est, "🚫 垃圾段不做"
 
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
@@ -155,12 +140,16 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return time_index_est, f"📉 主跌浪 Put 入场（{strength}）"
-        elif check_pre_call(row):
-            return time_index_est, "⏳ Call 预备信号"
-        elif check_pre_put(row):
-            return time_index_est, "⏳ Put 预备信号"
 
     return None, None
+
+def get_data():
+    df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+    df = compute_indicators(df)
+    return df
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
@@ -187,4 +176,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
