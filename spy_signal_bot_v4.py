@@ -108,8 +108,6 @@ def get_data():
     df.ffill(inplace=True)
     return df.dropna()
 
-# --- 后面的信号逻辑保持---
-
 def main():
     try:
         df = get_data()
