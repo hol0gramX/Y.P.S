@@ -77,7 +77,7 @@ def save_last_signal(state):
 
 def backtest():
     est = "America/New_York"
-    df = yf.download(SYMBOL, interval="1m", start="2025-06-24", end="2025-06-25", progress=False)
+    df = yf.download(SYMBOL, interval="1m", start="2025-06-21", end="2025-06-22", progress=False)
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
