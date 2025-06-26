@@ -1,82 +1,87 @@
-# strategy_refinement_analyzer.py
-
+import os
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import os
-import json
 
-# -------- CONFIG --------
+# ----------- 配置 -----------
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-REPORT_FILE = "refinement_report.txt"
 
-# -------- Load Today Data --------
-def get_today_data():
-    today = datetime.now(tz=EST).date()
-    start = datetime.combine(today, datetime.min.time()).astimezone(EST)
-    end = start + timedelta(days=1)
+# ----------- 工具函数 -----------
+def get_est_now():
+    return datetime.now(tz=EST)
 
-    df = yf.download(SYMBOL, interval="1m", start=start, end=end, progress=False, prepost=True)
-    df.index = df.index.tz_localize("UTC").tz_convert(EST)
-    df = df.dropna(subset=["Close", "Volume"])
+def load_signal_log(file_path="signal_log.csv"):
+    if not os.path.exists(file_path):
+        print("[信息] 未找到 signal_log.csv 文件")
+        return pd.DataFrame()
+    df = pd.read_csv(file_path, parse_dates=['timestamp'])
+    if df['timestamp'].dt.tz is None:
+        df['timestamp'] = df['timestamp'].dt.tz_localize("UTC").dt.tz_convert(EST)
+    else:
+        df['timestamp'] = df['timestamp'].dt.tz_convert(EST)
     return df
 
-# -------- Compute Indicators --------
-def compute_indicators(df):
-    df['RSI'] = df['Close'].diff().apply(lambda x: x if x > 0 else 0).rolling(14).mean() / \
-                df['Close'].diff().apply(lambda x: -x if x < 0 else 0).rolling(14).mean()
-    df['RSI'] = 100 - 100 / (1 + df['RSI'])
-    macd_line = df['Close'].ewm(span=12, adjust=False).mean() - df['Close'].ewm(span=26, adjust=False).mean()
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    df['MACD'] = macd_line
-    df['MACDs'] = signal_line
-    df['MACDh'] = df['MACD'] - df['MACDs']
+def download_market_data():
+    end = get_est_now()
+    start = end - timedelta(days=3)
+    df = yf.download(SYMBOL, interval="1m", start=start, end=end, progress=False, prepost=True, auto_adjust=True)
+    if df.empty:
+        raise ValueError("下载的数据为空")
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
     return df
 
-# -------- Analyze Missed Opportunities --------
-def analyze_missed_signals(df):
-    report = []
-    window = 30  # lookback for swing detection
+def analyze_signals(signal_df, market_df):
+    if signal_df.empty:
+        print("[信息] 无信号记录可分析")
+        return
 
-    max_up = df['Close'].rolling(window).max()
-    min_down = df['Close'].rolling(window).min()
+    issues = []
 
-    large_up = ((max_up - df['Close']) / df['Close'] < -0.015)
-    large_down = ((df['Close'] - min_down) / df['Close'] < -0.015)
+    for i, row in signal_df.iterrows():
+        ts = row['timestamp']
+        label = row['signal']
 
-    missed_call = df[(df['RSI'] > 70) & (df['MACDh'] > 0.5) & large_up]
-    missed_put = df[(df['RSI'] < 30) & (df['MACDh'] < -0.5) & large_down]
+        if ts not in market_df.index:
+            nearest_idx = market_df.index.get_indexer([ts], method='nearest')[0]
+            ts = market_df.index[nearest_idx]
 
-    if not missed_call.empty:
-        report.append(f"⚠️ 检测到 {len(missed_call)} 个可能未捕捉的上涨波段。建议审查 Call 入场条件，如 RSI 放宽至 60-65，MACDh 阈值放松至 0.3。")
+        price_at_signal = market_df.loc[ts]['Close']
+        after_slice = market_df.loc[ts:ts + timedelta(minutes=30)]
+        if after_slice.empty:
+            continue
 
-    if not missed_put.empty:
-        report.append(f"⚠️ 检测到 {len(missed_put)} 个可能未捕捉的下跌波段。建议审查 Put 入场条件，如 RSI 提高至 35-40，MACDh 放宽至 -0.3。")
+        high_after = after_slice['High'].max()
+        low_after = after_slice['Low'].min()
 
-    if len(report) == 0:
-        report.append("✅ 今日无明显错失信号，当前策略表现稳定。")
+        if "Call" in label:
+            if high_after < price_at_signal * 1.005:
+                issues.append((ts, label, "Call信号后无上涨延续"))
+        elif "Put" in label:
+            if low_after > price_at_signal * 0.995:
+                issues.append((ts, label, "Put信号后无下跌延续"))
 
-    return report
+    if issues:
+        print("[分析结果] 策略潜在问题：")
+        for ts, label, reason in issues:
+            print(f"- {ts.strftime('%Y-%m-%d %H:%M')} | {label} | ⚠️ {reason}")
+    else:
+        print("[分析结果] ✅ 所有信号行为合理，无明显缺陷")
 
-# -------- Save Report --------
-def save_report(lines):
-    with open(REPORT_FILE, 'w', encoding='utf-8') as f:
-        f.write(f"🧠 策略诊断报告 - {datetime.now(tz=EST).strftime('%Y-%m-%d')}\n\n")
-        for line in lines:
-            f.write(line + "\n")
-    print(f"📄 报告生成完成：{REPORT_FILE}")
-
-# -------- Main --------
+# ----------- 主流程 -----------
 def main():
     try:
-        df = get_today_data()
-        df = compute_indicators(df)
-        report = analyze_missed_signals(df)
-        save_report(report)
+        print(f"[DEBUG] 当前时间：{get_est_now().strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        signals = load_signal_log()
+        market = download_market_data()
+        analyze_signals(signals, market)
     except Exception as e:
         print("[错误] 分析失败：", e)
 
 if __name__ == "__main__":
     main()
+
