@@ -2,6 +2,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
+STATE_FILE = "last_signal_backtest.json"
 SYMBOL = "SPY"
 
 def compute_rsi(series, length=14):
@@ -24,10 +25,18 @@ def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
 def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > -0.1
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0.05
 
 def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0.1
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < -0.05
+
+def vwapped_enough(row, direction):
+    price = float(row['Close'])
+    vwap = float(row['VWAP'])
+    if direction == 'call':
+        return (price - vwap) / vwap > 0.001  # 至少高出 0.1%
+    else:
+        return (vwap - price) / vwap > 0.001
 
 def determine_strength(row, direction):
     strength = "中"
@@ -45,40 +54,45 @@ def determine_strength(row, direction):
 
 def check_call_entry(row):
     return (
-        (float(row['Close']) > float(row['VWAP']) or
-         (float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > -0.1)) and
-        float(row['RSI']) > 48
+        row['RSI'] > 52 and
+        strong_volume(row) and
+        macd_trending_up(row) and
+        vwapped_enough(row, 'call')
     )
 
 def check_put_entry(row):
     return (
-        (float(row['Close']) < float(row['VWAP']) or
-         (float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0.1)) and
-        float(row['RSI']) < 52
+        row['RSI'] < 48 and
+        strong_volume(row) and
+        macd_trending_down(row) and
+        vwapped_enough(row, 'put')
     )
 
 def check_call_exit(row):
-    return float(row['MACD']) < float(row['MACDs']) or float(row['RSI']) < 45
+    return row['RSI'] < 48 or row['MACD'] < row['MACDs']
 
 def check_put_exit(row):
-    return float(row['MACD']) > float(row['MACDs']) or float(row['RSI']) > 55
+    return row['RSI'] > 52 or row['MACD'] > row['MACDs']
+
+def load_last_signal():
+    return {"position": "none"}
+
+def save_last_signal(state):
+    pass
 
 def backtest():
     est = "America/New_York"
     df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
-
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
     df = df.dropna()
 
-    state = {"position": "none"}
+    state = load_last_signal()
     results = []
 
     for idx, row in df.iterrows():
