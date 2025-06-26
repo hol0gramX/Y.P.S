@@ -1,4 +1,4 @@
-import yfinance as yf
+ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
@@ -44,56 +44,50 @@ def determine_strength(row, direction):
             strength = "弱"
     return strength
 
-def allow_trade(row, ema_fast, ema_slow):
-    high_window = row['High_Max10']
-    low_window = row['Low_Min10']
-    range_percent = (high_window - low_window) / low_window
-    ema_converged = abs(ema_fast - ema_slow) < 0.1
-    return range_percent >= 0.006 and not ema_converged
-
 def check_call_entry(row):
-    price_dislocation = (row['Close'] - row['EMA9']) / row['EMA9']
-    cond1 = row['Close'] > row['VWAP'] and row['RSI'] > 52 and strong_volume(row) and macd_trending_up(row)
-    cond2 = price_dislocation > 0.01 and row['EMA9'] > row['EMA21']
-    cond3 = row['MACDh'] > row['MACDh_prev'] and row['RSI'] < 35 and row['EMA9'] > row['EMA21']
-    return (cond1 or cond2 or cond3) and allow_trade(row, row['EMA9'], row['EMA21'])
+    return (
+        float(row['Close']) > float(row['VWAP']) and
+        float(row['RSI']) > 52 and
+        strong_volume(row) and
+        macd_trending_up(row)
+    )
 
 def check_put_entry(row):
-    price_dislocation = (row['Close'] - row['EMA9']) / row['EMA9']
-    cond1 = row['Close'] < row['VWAP'] and row['RSI'] < 48 and strong_volume(row) and macd_trending_down(row)
-    cond2 = price_dislocation < -0.01 and row['EMA9'] < row['EMA21']
-    cond3 = row['MACDh'] < row['MACDh_prev'] and row['RSI'] > 65 and row['EMA9'] < row['EMA21']
-    return (cond1 or cond2 or cond3) and allow_trade(row, row['EMA9'], row['EMA21'])
+    return (
+        float(row['Close']) < float(row['VWAP']) and
+        float(row['RSI']) < 48 and
+        strong_volume(row) and
+        macd_trending_down(row)
+    )
 
 def check_call_exit(row):
-    return (row['RSI'] < 55 or row['MACDh'] < row['MACDh_prev']) and strong_volume(row)
+    return float(row['RSI']) < 48 and strong_volume(row)
 
 def check_put_exit(row):
-    return (row['RSI'] > 45 or row['MACDh'] > row['MACDh_prev']) and strong_volume(row)
+    return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
+    # 回测时从none开始
     return {"position": "none"}
 
 def save_last_signal(state):
+    # 回测时不需要保存状态到文件
     pass
 
 def backtest():
     est = "America/New_York"
-    df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False, auto_adjust=False)
-    
+    df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+
+    # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df['EMA9'] = ta.ema(df['Close'], 9)
-    df['EMA21'] = ta.ema(df['Close'], 21)
-    df['High_Max10'] = df['High'].rolling(10).max()
-    df['Low_Min10'] = df['Low'].rolling(10).min()
     df = compute_macd(df)
-    df['MACDh_prev'] = df['MACDh'].shift(1)
     df = df.dropna()
 
     state = load_last_signal()
@@ -102,6 +96,7 @@ def backtest():
     for idx, row in df.iterrows():
         current_pos = state["position"]
 
+        # 处理时间索引时区
         if idx.tz is None:
             est_time = idx.tz_localize('UTC').tz_convert(est)
         else:
@@ -133,6 +128,7 @@ def backtest():
                 state["position"] = "put"
                 results.append((est_time, f"Put 入场（{strength}）"))
 
+    # 打印回测结果，时间按美东显示
     for time, signal in results:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
