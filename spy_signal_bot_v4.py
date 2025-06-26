@@ -22,14 +22,6 @@ def get_trading_days(start_date, end_date):
     schedule = nasdaq.schedule(start_date=start_date, end_date=end_date)
     return schedule.index.tz_localize(None)
 
-def get_prev_trading_day(date):
-    date = pd.Timestamp(date).normalize()
-    trading_days = get_trading_days(date - timedelta(days=7), date)
-    prev_days = trading_days[trading_days < date]
-    if len(prev_days) == 0:
-        raise ValueError("未找到之前的交易日")
-    return prev_days[-1].date()
-
 def get_market_open_close(date):
     schedule = nasdaq.schedule(start_date=date, end_date=date)
     if schedule.empty:
@@ -70,29 +62,25 @@ def get_data():
     start_search = today - timedelta(days=14)
     trading_days = get_trading_days(start_search, today)
     trading_days = trading_days[trading_days <= pd.Timestamp(today)]
-    print(f"交易日列表（最近14天内）: {trading_days}")
 
     if len(trading_days) < 3:
         raise ValueError("最近交易日不足3个")
-    recent_3_days = trading_days[-3:]
-    print(f"最近3个交易日: {recent_3_days}")
 
+    recent_3_days = trading_days[-3:]
     sessions = []
+
     for d in recent_3_days:
         o, c = get_market_open_close(d.date())
         early = is_early_close(d.date())
         if o is None or c is None:
-            raise ValueError(f"{d.date()}无交易时段")
-        print(f"{d.date()} - 开盘: {o}, 收盘: {c}, 是否早收盘: {early}")
-        sessions.append({'date': d.date(), 'open': o.replace(microsecond=0), 'close': c.replace(microsecond=0), 'early_close': early})
+            raise ValueError(f"{d.date()} 无交易时段")
+        sessions.append({'date': d.date(), 'open': o, 'close': c, 'early_close': early})
 
     start_dt = sessions[0]['open']
     end_dt = sessions[-1]['close']
 
-    print(f"数据抓取区间(EST): {start_dt} - {end_dt}")
-
-    yf_start = start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
-    yf_end = (end_dt + timedelta(seconds=1)).tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
+    yf_start = start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M')
+    yf_end = (end_dt + timedelta(minutes=1)).tz_convert('UTC').strftime('%Y-%m-%d %H:%M')
     print(f"yf下载时间区间(UTC): {yf_start} - {yf_end}")
 
     df = yf.download(
@@ -105,7 +93,6 @@ def get_data():
         auto_adjust=True
     )
 
-    print(f"下载数据行数: {len(df)}")
     if df.empty:
         raise ValueError("下载的数据为空")
 
@@ -128,73 +115,6 @@ def get_data():
 
         pre_market_start = open_time - timedelta(hours=5, minutes=30)
         pre_market_end = open_time
-
-        market_start = open_time
-        market_end = close_time
-
-        if early_close:
-            post_market_start = None
-            post_market_end = None
-        else:
-            post_market_start = close_time
-            post_market_end = close_time + timedelta(hours=4)
-
-        mask = (
-            ((df.index >= pre_market_start) & (df.index < pre_market_end)) |
-            ((df.index >= market_start) & (df.index < market_end))
-        )
-        if post_market_start and post_market_end:
-            mask = mask | ((df.index >= post_market_start) & (df.index < post_market_end))
-
-        valid_mask = valid_mask | mask
-
-        print(f"{sess['date']} 过滤后行数: {mask.sum()}")
-
-    df_filtered = df[valid_mask].copy()
-    print(f"过滤后数据行数: {len(df_filtered)}")
-
-    if len(df_filtered) < 30:
-        raise ValueError("数据行数不足，无法计算指标")
-
-    df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
-    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14)
-    df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
-    df_filtered = compute_macd(df_filtered)
-    df_filtered.ffill(inplace=True)
-
-    return df_filtered.dropna()
-
-
-    df = yf.download(
-        SYMBOL,
-        interval="1m",
-        start=yf_start,
-        end=yf_end,
-        progress=False,
-        prepost=True,
-        auto_adjust=True
-    )
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-    df = df[df['Volume'] > 0]
-
-    if df.index.tz is None:
-        df.index = df.index.tz_localize('UTC').tz_convert(EST)
-    else:
-        df.index = df.index.tz_convert(EST)
-
-    valid_mask = pd.Series(False, index=df.index)
-    for sess in sessions:
-        open_time = sess['open']
-        close_time = sess['close']
-        early_close = sess['early_close']
-
-        pre_market_start = open_time - timedelta(hours=5, minutes=30)
-        pre_market_end = open_time
-
         market_start = open_time
         market_end = close_time
 
@@ -215,6 +135,7 @@ def get_data():
         valid_mask = valid_mask | mask
 
     df_filtered = df[valid_mask].copy()
+
     if len(df_filtered) < 30:
         raise ValueError("数据行数不足，无法计算指标")
 
@@ -226,7 +147,6 @@ def get_data():
 
     return df_filtered.dropna()
 
-# 判断函数
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
@@ -272,13 +192,11 @@ def check_call_exit(row):
 def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
-# 状态管理，避免重复进场信号
 def load_last_signal():
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, 'r') as f:
-                state = json.load(f)
-                return state
+                return json.load(f)
     except Exception:
         pass
     return {"position": "none"}
@@ -290,7 +208,6 @@ def save_last_signal(state):
     except Exception:
         pass
 
-# 核心信号逻辑，保证：有仓位时先出场，出场后判断是否反手或空仓入场，空仓时检测进场
 def generate_signal(df):
     if len(df) < 6:
         return None, None
@@ -304,38 +221,27 @@ def generate_signal(df):
         time_index = time_index.tz_localize("UTC")
     time_index_est = time_index.tz_convert(EST)
 
-    if current_pos == "call":
-        # Call仓位，判断出场信号
-        if check_call_exit(row):
-            # 出场Call
-            state["position"] = "none"
+    if current_pos == "call" and check_call_exit(row):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_put_entry(row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
             save_last_signal(state)
+            return time_index_est, f"🔁 反手 Put：Call 出场后 Put 入场（{strength}）"
+        return time_index_est, "⚠️ Call 出场信号"
 
-            # 出场后判断是否反手入Put
-            if check_put_entry(row):
-                strength = determine_strength(row, "put")
-                state["position"] = "put"
-                save_last_signal(state)
-                return time_index_est, f"🔁 反手 Put：Call 出场后 Put 入场（{strength}）"
-            return time_index_est, "⚠️ Call 出场信号"
-
-    elif current_pos == "put":
-        # Put仓位，判断出场信号
-        if check_put_exit(row):
-            # 出场Put
-            state["position"] = "none"
+    elif current_pos == "put" and check_put_exit(row):
+        state["position"] = "none"
+        save_last_signal(state)
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
             save_last_signal(state)
-
-            # 出场后判断是否反手入Call
-            if check_call_entry(row):
-                strength = determine_strength(row, "call")
-                state["position"] = "call"
-                save_last_signal(state)
-                return time_index_est, f"🔁 反手 Call：Put 出场后 Call 入场（{strength}）"
-            return time_index_est, "⚠️ Put 出场信号"
+            return time_index_est, f"🔁 反手 Call：Put 出场后 Call 入场（{strength}）"
+        return time_index_est, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
-        # 空仓时判断进场
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
@@ -347,30 +253,26 @@ def generate_signal(df):
             save_last_signal(state)
             return time_index_est, f"📉 Put 入场（{strength}）"
 
-    # 无信号或状态不变
     return None, None
 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
         print("DISCORD_WEBHOOK_URL 未设置，消息不发送")
         return
-    payload = {"content": message}
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
     except Exception as e:
         print(f"发送 Discord 失败: {e}")
 
 def main():
     now = get_est_now()
     try:
-        # 非交易时间跳过
         if now.time() >= time(20,0) or now.time() < time(4,0):
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 非交易时间，跳过运行")
             return
 
         df = get_data()
 
-        # 盘前盘后时间提示，正常交易时间才生成信号
         if time(4,0) <= now.time() < time(9,30):
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 盘前数据采集完成，时间范围: {df.index[0]} ~ {df.index[-1]}")
             return
