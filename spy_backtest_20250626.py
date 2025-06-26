@@ -48,16 +48,25 @@ def compute_macd(df):
 def get_latest_5min_trend(df_5min, ts):
     subset = df_5min.loc[df_5min.index <= ts]
     recent = subset.loc[subset.index >= ts - timedelta(hours=2)]
+    
+    # ✅ 显式判断 empty
     if recent.empty or len(recent) < 10:
         return None
+
     ma20 = recent['Close'].rolling(20).mean()
     latest = recent.iloc[-1]['Close']
+    
+    # ⚠️ 注意：ma20.iloc[-1] 也可能是 NaN（rolling 尚未满20）
+    if pd.isna(ma20.iloc[-1]):
+        return None
+
     if latest > ma20.iloc[-1]:
         return {"trend": "📈上涨"}
     elif latest < ma20.iloc[-1]:
         return {"trend": "📉下跌"}
     else:
         return {"trend": "⚖️震荡"}
+
 
 # ========= 数据加载 =========
 def get_data():
