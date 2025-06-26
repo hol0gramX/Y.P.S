@@ -168,13 +168,27 @@ def main():
                 signals.append(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
                 save_last_signal(state)
 
+                ...
         if not signals:
             print("[信息] 今日无信号生成")
         else:
             print("\n".join(signals))
 
+        # ✅ 补丁：收盘清仓逻辑
+        last_dt = df.index[-1]
+        last_date = last_dt.date()
+        sch = nasdaq.schedule(start_date=last_date, end_date=last_date)
+        if not sch.empty:
+            close_time = sch.iloc[0]['market_close'].tz_convert(EST)
+            if df.index[-1] >= close_time:
+                if state.get("position", "none") != "none":
+                    print(f"[{close_time.strftime('%Y-%m-%d %H:%M')}] 🛑 收盘清仓")
+                    state["position"] = "none"
+                    save_last_signal(state)
+
     except Exception as e:
         print(f"[❌ 回测失败] {e}")
+
 
 if __name__ == "__main__":
     main()
