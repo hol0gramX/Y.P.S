@@ -8,13 +8,12 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas_market_calendars as mcal
 
-STATE_FILE = "last_signal.json"
+STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========== 时间与市场日历处理 ==========
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -46,7 +45,6 @@ def is_early_close(date):
     actual_close = schedule.iloc[0]['market_close'].tz_convert(EST)
     return actual_close < normal_close
 
-# ========== 技术指标计算 ==========
 def compute_rsi(series, length=14):
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -64,40 +62,36 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-# ========== 核心数据处理 ==========
 def get_data():
     now = get_est_now()
     today = now.date()
-    prev_day = get_prev_trading_day(today)
 
-    prev_open, prev_close = get_market_open_close(prev_day)
-    today_open, today_close = get_market_open_close(today)
+    start_search = today - timedelta(days=14)
+    trading_days = get_trading_days(start_search, today)
+    trading_days = trading_days[trading_days <= pd.Timestamp(today)]
+    if len(trading_days) < 3:
+        raise ValueError("最近交易日不足3个")
+    recent_3_days = trading_days[-3:]
 
-    if prev_close is None or today_open is None:
-        raise ValueError("无法获取市场开收盘时间，可能是非交易日")
+    sessions = []
+    for d in recent_3_days:
+        o, c = get_market_open_close(d.date())
+        early = is_early_close(d.date())
+        if o is None or c is None:
+            raise ValueError(f"{d.date()}无交易时段")
+        sessions.append({'date': d.date(), 'open': o, 'close': c, 'early_close': early})
 
-    # 判断前一个交易日是否early close
-    if is_early_close(prev_day):
-        # Early close当日无post-market，跳过post-market筛选
-        post_market_start = None
-        post_market_end = None
-    else:
-        # 正常收盘日，post-market为收盘后4小时
-        post_market_start = prev_close
-        post_market_end = prev_close + timedelta(hours=4)
+    start_dt = sessions[0]['open']
+    end_dt = sessions[-1]['close']
 
-    # pre-market开始时间 = 今日开盘时间 - 5.5小时（一般为4:00AM）
-    pre_market_start = today_open - timedelta(hours=5, minutes=30)
-    pre_market_end = today_open
+    yf_start = start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
+    yf_end = (end_dt + timedelta(seconds=1)).tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S')
 
-    market_start = today_open
-    market_end = today_close
-
-    # 下载3天数据，含pre和post
     df = yf.download(
         SYMBOL,
         interval="1m",
-        period="3d",
+        start=yf_start,
+        end=yf_end,
         progress=False,
         prepost=True,
         auto_adjust=True
@@ -114,15 +108,35 @@ def get_data():
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 筛选数据，post_market_start为None时不筛选post-market时间段
-    df_filtered = df[
-        (
-            (post_market_start is not None) and
-            (df.index >= post_market_start) & (df.index < post_market_end)
-        ) |
-        ((df.index >= pre_market_start) & (df.index < pre_market_end)) |
-        ((df.index >= market_start) & (df.index < market_end))
-    ].copy()
+    valid_mask = pd.Series(False, index=df.index)
+    for sess in sessions:
+        open_time = sess['open']
+        close_time = sess['close']
+        early_close = sess['early_close']
+
+        pre_market_start = open_time - timedelta(hours=5, minutes=30)
+        pre_market_end = open_time
+
+        market_start = open_time
+        market_end = close_time
+
+        if early_close:
+            post_market_start = None
+            post_market_end = None
+        else:
+            post_market_start = close_time
+            post_market_end = close_time + timedelta(hours=4)
+
+        mask = (
+            ((df.index >= pre_market_start) & (df.index < pre_market_end)) |
+            ((df.index >= market_start) & (df.index < market_end))
+        )
+        if post_market_start and post_market_end:
+            mask = mask | ((df.index >= post_market_start) & (df.index < post_market_end))
+
+        valid_mask = valid_mask | mask
+
+    df_filtered = df[valid_mask].copy()
 
     if len(df_filtered) < 30:
         raise ValueError("数据行数不足，无法计算指标")
@@ -135,7 +149,6 @@ def get_data():
 
     return df_filtered.dropna()
 
-# ========== 策略逻辑（保持原样） ==========
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
@@ -182,14 +195,27 @@ def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+                print(f"[DEBUG] 读取持仓状态: {state}")
+                return state
+    except Exception as e:
+        print(f"[ERROR] 读取状态失败: {e}")
+    print("[DEBUG] 状态文件不存在或读取失败，默认无仓位")
     return {"position": "none"}
 
 def save_last_signal(state):
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+        print(f"[DEBUG] 保存持仓状态: {state}")
+        with open(STATE_FILE, 'r') as f:
+            verify = json.load(f)
+        print(f"[DEBUG] 验证保存状态: {verify}")
+    except Exception as e:
+        print(f"[ERROR] 保存状态失败: {e}")
 
 def generate_signal(df):
     if len(df) < 6:
@@ -249,6 +275,7 @@ def send_to_discord(message):
         print("发送 Discord 失败:", e)
 
 def main():
+    print(f"[DEBUG] 当前工作目录: {os.getcwd()}")
     now = get_est_now()
     try:
         df = get_data()
@@ -265,13 +292,14 @@ def main():
 
         time_signal, signal = generate_signal(df)
         if signal and time_signal:
-            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
+            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S')}] {signal}"
             print(msg)
             send_to_discord(msg)
         else:
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无交易信号")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无信号")
+
     except Exception as e:
-        print("运行出错：", e)
+        print(f"[ERROR] 运行异常: {e}")
 
 if __name__ == "__main__":
     main()
