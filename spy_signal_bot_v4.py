@@ -15,6 +15,11 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 def get_est_now():
     return datetime.now(tz=ZoneInfo("America/New_York"))
 
+def is_market_open():
+    now = get_est_now()
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now <= market_close
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -25,7 +30,6 @@ def compute_rsi(series, length=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-
 def compute_macd(df):
     macd = ta.macd(df['Close'])
     if macd is None or macd.isna().all().any():
@@ -34,7 +38,6 @@ def compute_macd(df):
     df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
-
 
 def get_data():
     df = yf.download(SYMBOL, interval="1m", period="1d", progress=False)
@@ -49,18 +52,14 @@ def get_data():
     df = compute_macd(df)
     return df.dropna()
 
-
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
-
 
 def macd_trending_up(row):
     return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
 
-
 def macd_trending_down(row):
     return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
-
 
 def determine_strength(row, direction):
     strength = "中"
@@ -76,7 +75,6 @@ def determine_strength(row, direction):
             strength = "弱"
     return strength
 
-
 def check_call_entry(row):
     return (
         float(row['Close']) > float(row['VWAP']) and
@@ -84,7 +82,6 @@ def check_call_entry(row):
         strong_volume(row) and
         macd_trending_up(row)
     )
-
 
 def check_put_entry(row):
     return (
@@ -94,14 +91,11 @@ def check_put_entry(row):
         macd_trending_down(row)
     )
 
-
 def check_call_exit(row):
     return float(row['RSI']) < 48 and strong_volume(row)
 
-
 def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
-
 
 def load_last_signal():
     if os.path.exists(STATE_FILE):
@@ -109,11 +103,9 @@ def load_last_signal():
             return json.load(f)
     return {"position": "none"}
 
-
 def save_last_signal(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
-
 
 def generate_signal(df):
     if len(df) < 6:
@@ -124,7 +116,7 @@ def generate_signal(df):
     state = load_last_signal()
     current_pos = state.get("position", "none")
 
-    now_est = datetime.now(ZoneInfo("America/New_York"))
+    now_est = get_est_now()
     row_time = row.name
     if row_time.tzinfo is None:
         row_time = row_time.tz_localize("UTC")
@@ -184,7 +176,6 @@ def generate_signal(df):
     print("[Debug] ❌ 无入场/出场信号")
     return None, None
 
-
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
         print("DISCORD_WEBHOOK_URL 未设置")
@@ -195,21 +186,17 @@ def send_to_discord(message):
     except Exception as e:
         print("发送 Discord 失败：", e)
 
-
 def main():
+    now = get_est_now()
+    if not is_market_open():
+        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❌ 非交易时间，跳过运行")
+        return
+
     try:
         df = get_data()
         time_signal, signal = generate_signal(df)
         if signal and time_signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
-            send_to_discord(msg)
-        else:
-            print(f"[{get_est_now().strftime('%Y-%m-%d %H:%M:%S %Z')}] 无信号")
-    except Exception as e:
-        print("运行出错：", e)
-
-
-if __name__ == "__main__":
-    main()
+            send_to
 
