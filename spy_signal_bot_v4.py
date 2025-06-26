@@ -38,6 +38,14 @@ def get_market_open_close(date):
     market_close = schedule.iloc[0]['market_close'].tz_convert(EST)
     return market_open, market_close
 
+def is_early_close(date):
+    schedule = nasdaq.schedule(start_date=date, end_date=date)
+    if schedule.empty:
+        return False
+    normal_close = pd.Timestamp.combine(date, time(16, 0)).tz_localize(EST)
+    actual_close = schedule.iloc[0]['market_close'].tz_convert(EST)
+    return actual_close < normal_close
+
 # ========== 技术指标计算 ==========
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -68,15 +76,24 @@ def get_data():
     if prev_close is None or today_open is None:
         raise ValueError("无法获取市场开收盘时间，可能是非交易日")
 
-    post_market_start = prev_close
-    post_market_end = prev_close + timedelta(hours=4)
+    # 判断前一个交易日是否early close
+    if is_early_close(prev_day):
+        # Early close当日无post-market，跳过post-market筛选
+        post_market_start = None
+        post_market_end = None
+    else:
+        # 正常收盘日，post-market为收盘后4小时
+        post_market_start = prev_close
+        post_market_end = prev_close + timedelta(hours=4)
 
+    # pre-market开始时间 = 今日开盘时间 - 5.5小时（一般为4:00AM）
     pre_market_start = today_open - timedelta(hours=5, minutes=30)
     pre_market_end = today_open
 
     market_start = today_open
     market_end = today_close
 
+    # 下载3天数据，含pre和post
     df = yf.download(
         SYMBOL,
         interval="1m",
@@ -97,8 +114,12 @@ def get_data():
     else:
         df.index = df.index.tz_convert(EST)
 
+    # 筛选数据，post_market_start为None时不筛选post-market时间段
     df_filtered = df[
-        ((df.index >= post_market_start) & (df.index < post_market_end)) |
+        (
+            (post_market_start is not None) and
+            (df.index >= post_market_start) & (df.index < post_market_end)
+        ) |
         ((df.index >= pre_market_start) & (df.index < pre_market_end)) |
         ((df.index >= market_start) & (df.index < market_end))
     ].copy()
@@ -254,4 +275,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
