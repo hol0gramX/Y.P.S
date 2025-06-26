@@ -39,7 +39,7 @@ def save_last_signal(state):
 
 load_last_signal = load_last_signal_from_gist
 
-# --------- 数据拉取 ---------
+# --------- 工具函数 ---------
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -64,6 +64,7 @@ def is_market_open_now():
     market_close = sch.iloc[0]['market_close'].tz_convert(EST)
     return market_open <= now <= market_close
 
+# --------- 指标计算 ---------
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -89,6 +90,7 @@ def get_5min_trend():
     else:
         return "neutral"
 
+# --------- 主数据获取 ---------
 def get_data():
     now = get_est_now()
     today = now.date()
@@ -128,7 +130,7 @@ def get_data():
     df.ffill(inplace=True)
     return df.dropna()
 
-# --------- 逻辑判断函数 ---------
+# --------- 信号判断 ---------
 def strong_volume(row):
     return row['Volume'] >= row['Vol_MA5']
 
@@ -183,7 +185,6 @@ def check_market_closed_and_clear():
     sch = nasdaq.schedule(start_date=today, end_date=today)
     if sch.empty:
         return False
-
     close_time = sch.iloc[0]['market_close'].tz_convert(EST)
     if now > close_time + timedelta(minutes=1):
         state = load_last_signal()
@@ -191,10 +192,12 @@ def check_market_closed_and_clear():
             state["position"] = "none"
             save_last_signal(state)
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🛑 收盘后自动清仓（状态归零）")
+        else:
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📭 市场关闭，当前已空仓")
         return True
     return False
 
-# --------- 主信号判断 ---------
+# --------- 信号生成主逻辑 ---------
 def generate_signal(df):
     if len(df) < 6: return None, None
     row = df.iloc[-1]
@@ -248,14 +251,14 @@ def generate_signal(df):
 
     return None, None
 
-# --------- 发送通知 ---------
+# --------- 通知 ---------
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
         print("[通知] DISCORD_WEBHOOK_URL 未设置")
         return
     requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# --------- 主流程 ---------
+# --------- 主函数 ---------
 def main():
     try:
         if check_market_closed_and_clear():
@@ -276,7 +279,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
