@@ -1,35 +1,24 @@
+# ✅ 最新稳定版：spy_backtest_20250626.py
+# 含 5分钟趋势判断，修复所有 Series 判断歧义
+
 import os
 import json
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta, time
-from zoneinfo import ZoneInfo
 import pandas_ta as ta
-import pandas_market_calendars as mcal
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-# ========= 配置 =========
+# -------- 配置 --------
 SYMBOL = "SPY"
-STATE_FILE = os.path.abspath("last_signal.json")
+STATE_FILE = "last_signal.json"
 EST = ZoneInfo("America/New_York")
-nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========= 时间相关 =========
+# -------- 时间函数 --------
 def get_est_now():
     return datetime.now(tz=EST)
 
-def get_trading_days(start, end):
-    return nasdaq.schedule(start_date=start, end_date=end).index.tz_localize(None)
-
-def get_market_open_close(d):
-    sch = nasdaq.schedule(start_date=d, end_date=d)
-    if sch.empty: return None, None
-    return sch.iloc[0]['market_open'].tz_convert(EST), sch.iloc[0]['market_close'].tz_convert(EST)
-
-def is_early_close(d):
-    sch = nasdaq.schedule(start_date=d, end_date=d)
-    return not sch.empty and sch.iloc[0]['market_close'].tz_convert(EST).hour < 16
-
-# ========= 技术指标 =========
+# -------- 指标计算 --------
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -44,7 +33,7 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-# ========= 趋势判断（5min） =========
+# -------- 趋势判断 --------
 def get_latest_5min_trend(df_5min, ts):
     try:
         subset = df_5min[df_5min.index <= ts]
@@ -71,55 +60,7 @@ def get_latest_5min_trend(df_5min, ts):
         print(f"[5min趋势判断失败] {e}")
         return None
 
-
-
-# ========= 数据加载 =========
-def get_data():
-    now = get_est_now()
-    today = now.date()
-    trade_days = get_trading_days(today - timedelta(days=14), today)
-    trade_days = trade_days[trade_days <= pd.Timestamp(today)]
-    recent = trade_days[-3:]
-
-    sessions = []
-    for d in recent:
-        op, cl = get_market_open_close(d.date())
-        early = is_early_close(d.date())
-        sessions.append((op, cl, early))
-
-    start_dt = sessions[0][0]
-    end_dt = sessions[-1][1] + timedelta(seconds=1)
-
-    print(f"[DEBUG] 下载数据：{start_dt.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    df = yf.download(SYMBOL, interval="1m", start=start_dt.tz_convert('UTC'), end=end_dt.tz_convert('UTC'),
-                     progress=False, prepost=True, auto_adjust=True)
-    if df.empty: raise ValueError("下载失败或数据为空")
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-    df = df[df['Volume'] > 0]
-    df.index = df.index.tz_convert(EST) if df.index.tz is not None else df.index.tz_localize('UTC').tz_convert(EST)
-
-    mask = pd.Series(False, index=df.index)
-    for op, cl, early in sessions:
-        intervals = [(op - timedelta(hours=5, minutes=30), op), (op, cl)]
-        if not early:
-            pm_start, pm_end = cl, cl + timedelta(hours=4)
-            intervals.append((pm_start, pm_end))
-        for s, e in intervals:
-            mask |= (df.index >= s) & (df.index < e)
-
-    df = df[mask]
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'])
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
-    df.ffill(inplace=True)
-    return df.dropna()
-
-# ========= 信号逻辑 =========
+# -------- 信号判断逻辑 --------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
 
 def determine_strength(row, direction):
@@ -137,18 +78,34 @@ def check_call_exit(row): return row['RSI'] < 48 and strong_volume(row)
 def check_put_exit(row): return row['RSI'] > 52 and strong_volume(row)
 
 def load_last_signal():
-    try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, 'r') as f:
-                return json.load(f)
-    except: pass
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
     return {"position": "none"}
 
 def save_last_signal(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-# ========= 主回测流程 =========
+# -------- 数据获取 --------
+def get_data():
+    now = get_est_now()
+    end_dt = now.replace(hour=16, minute=0, second=1, microsecond=0)
+    start_dt = end_dt - timedelta(days=2)
+    df = yf.download(SYMBOL, interval="1m", start=start_dt, end=end_dt, progress=False, prepost=True, auto_adjust=True)
+    if df.empty: raise ValueError("下载失败或数据为空")
+    df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
+    df = df.dropna(subset=['High','Low','Close','Volume'])
+    df = df[df['Volume'] > 0]
+    df.index = df.index.tz_localize('UTC').tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'])
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df = compute_macd(df)
+    df.ffill(inplace=True)
+    return df.dropna()
+
+# -------- 主流程 --------
 def main():
     print(f"[🔁 回测开始] {get_est_now().isoformat()}")
     try:
