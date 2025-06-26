@@ -50,30 +50,24 @@ def get_data():
     today = now.date()
     trade_days = get_trading_days(today - timedelta(days=14), today)
     trade_days = trade_days[trade_days <= pd.Timestamp(today)]
-    print("交易日列表:", trade_days)
     if len(trade_days) < 3:
         raise ValueError("交易日不足3")
     recent = trade_days[-3:]
-    print("最近3交易日:", recent)
 
     sessions = []
     for d in recent:
         op, cl = get_market_open_close(d.date())
         early = is_early_close(d.date())
-        print(f"{d.date()} - 开盘: {op}, 收盘: {cl}, 早收盘: {early}")
         sessions.append((op, cl, early))
 
     start_dt = sessions[0][0]
     end_dt = sessions[-1][1]
     yf_start = start_dt.tz_convert('UTC')
     yf_end = end_dt.tz_convert('UTC')
-    print("yf_range UTC:", yf_start, "-", yf_end)
 
     df = yf.download(SYMBOL, interval="1m",
                      start=yf_start, end=yf_end,
                      progress=False, prepost=True, auto_adjust=True)
-    print("下载Raw数据条数:", len(df))
-
     if df.empty:
         raise ValueError("下载数据为空")
 
@@ -82,7 +76,6 @@ def get_data():
     df = df.dropna(subset=['High','Low','Close','Volume'])
     df = df[df['Volume']>0]
     df.index = df.index.tz_localize('UTC').tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
-    print("UTC->EST后数据条数:", len(df))
 
     mask = pd.Series(False, index=df.index)
     for op,cl,early in sessions:
@@ -97,7 +90,6 @@ def get_data():
         for s,e in intervals:
             mask |= (df.index >= s) & (df.index < e)
     df = df[mask]
-    print("过滤后条数:", len(df))
     if len(df)<30:
         raise ValueError("过滤后数据不足")
 
@@ -108,7 +100,6 @@ def get_data():
     df.ffill(inplace=True)
     return df.dropna()
 
-# 信号判断相关函数（保持你原版逻辑，完全不改）
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
@@ -230,12 +221,12 @@ def main():
             print(msg)
             send_to_discord(msg)
         else:
-            # 无信号时打印日志，但不发discord
             now = get_est_now()
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无交易信号")
     except Exception as e:
         print("Error:", e)
-        
+
 if __name__ == "__main__":
     main()
+
 
