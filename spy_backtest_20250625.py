@@ -2,7 +2,6 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-STATE_FILE = "last_signal_backtest.json"
 SYMBOL = "SPY"
 
 def compute_rsi(series, length=14):
@@ -25,10 +24,10 @@ def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
 def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > -0.1
 
 def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0.1
 
 def determine_strength(row, direction):
     strength = "中"
@@ -46,33 +45,23 @@ def determine_strength(row, direction):
 
 def check_call_entry(row):
     return (
-        float(row['Close']) > float(row['VWAP']) and
-        float(row['RSI']) > 52 and
-        strong_volume(row) and
-        macd_trending_up(row)
+        (float(row['Close']) > float(row['VWAP']) or
+         (float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > -0.1)) and
+        float(row['RSI']) > 48
     )
 
 def check_put_entry(row):
     return (
-        float(row['Close']) < float(row['VWAP']) and
-        float(row['RSI']) < 48 and
-        strong_volume(row) and
-        macd_trending_down(row)
+        (float(row['Close']) < float(row['VWAP']) or
+         (float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0.1)) and
+        float(row['RSI']) < 52
     )
 
 def check_call_exit(row):
-    return float(row['RSI']) < 48 and strong_volume(row)
+    return float(row['MACD']) < float(row['MACDs']) or float(row['RSI']) < 45
 
 def check_put_exit(row):
-    return float(row['RSI']) > 52 and strong_volume(row)
-
-def load_last_signal():
-    # 回测时从none开始
-    return {"position": "none"}
-
-def save_last_signal(state):
-    # 回测时不需要保存状态到文件
-    pass
+    return float(row['MACD']) > float(row['MACDs']) or float(row['RSI']) > 55
 
 def backtest():
     est = "America/New_York"
@@ -83,24 +72,18 @@ def backtest():
 
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
 
-    # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
     df = df.dropna()
 
-    state = load_last_signal()
+    state = {"position": "none"}
     results = []
 
     for idx, row in df.iterrows():
         current_pos = state["position"]
-
-        # 处理时间索引时区
-        if idx.tz is None:
-            est_time = idx.tz_localize('UTC').tz_convert(est)
-        else:
-            est_time = idx.tz_convert(est)
+        est_time = idx.tz_localize('UTC').tz_convert(est) if idx.tz is None else idx.tz_convert(est)
 
         if current_pos == "call" and check_call_exit(row):
             results.append((est_time, "Call 出场"))
@@ -128,7 +111,6 @@ def backtest():
                 state["position"] = "put"
                 results.append((est_time, f"Put 入场（{strength}）"))
 
-    # 打印回测结果，时间按美东显示
     for time, signal in results:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
