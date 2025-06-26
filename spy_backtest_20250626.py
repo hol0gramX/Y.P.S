@@ -7,16 +7,14 @@ from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
 import pandas_market_calendars as mcal
-import csv
-from pathlib import Path
 
-EST = ZoneInfo("America/New_York")
+# --------- 常规配置 ---------
+STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
-STATE_FILE = "last_signal.json"
-LOG_FILE = "signal_log.csv"
+EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# --------- 工具函数 ---------
+# --------- 时间工具 ---------
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -28,25 +26,25 @@ def get_market_open_close(date):
     schedule = nasdaq.schedule(start_date=date, end_date=date)
     if schedule.empty:
         return None, None
-    open_time = schedule.iloc[0]['market_open'].tz_convert(EST)
-    close_time = schedule.iloc[0]['market_close'].tz_convert(EST)
-    return open_time, close_time
+    market_open = schedule.iloc[0]['market_open'].tz_convert(EST)
+    market_close = schedule.iloc[0]['market_close'].tz_convert(EST)
+    return market_open, market_close
 
 def is_early_close(date):
     schedule = nasdaq.schedule(start_date=date, end_date=date)
     if schedule.empty:
         return False
-    actual_close = schedule.iloc[0]['market_close'].tz_convert(EST)
     normal_close = pd.Timestamp.combine(date, time(16, 0)).tz_localize(EST)
+    actual_close = schedule.iloc[0]['market_close'].tz_convert(EST)
     return actual_close < normal_close
 
-# --------- 指标计算 ---------
+# --------- 技术指标 ---------
 def compute_rsi(series, length=14):
     delta = series.diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
-    avg_gain = up.rolling(length).mean()
-    avg_loss = down.rolling(length).mean()
+    avg_gain = up.rolling(window=length).mean()
+    avg_loss = down.rolling(window=length).mean()
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
@@ -61,50 +59,37 @@ def compute_macd(df):
 # --------- 数据获取 ---------
 def get_data():
     today = datetime(2025, 6, 26).date()
-    trade_days = get_trading_days(today - timedelta(days=14), today)
-    trade_days = trade_days[trade_days <= pd.Timestamp(today)]
-    recent = trade_days[-3:]
+    trading_days = get_trading_days(today - timedelta(days=14), today)
+    recent_days = trading_days[trading_days <= pd.Timestamp(today)].tolist()[-3:]
 
     sessions = []
-    for d in recent:
-        o, c = get_market_open_close(d.date())
+    for d in recent_days:
+        op, cl = get_market_open_close(d.date())
         early = is_early_close(d.date())
-        sessions.append((o, c, early))
+        sessions.append({'open': op, 'close': cl, 'early_close': early})
 
-    start_dt = sessions[0][0]
-    end_dt = sessions[-1][1] + timedelta(minutes=1)
+    start_dt = sessions[0]['open']
+    end_dt = sessions[-1]['close'] + timedelta(seconds=1)
 
-    # ❗️关键修复：转为 UTC 后去掉 tz 信息，避免 tz-aware 冲突
-    start_str = start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%d %H:%M:%S')
-    end_str = end_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%d %H:%M:%S')
+    yf_start = start_dt.astimezone(ZoneInfo("UTC")).replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
+    yf_end = end_dt.astimezone(ZoneInfo("UTC")).replace(microsecond=0).strftime('%Y-%m-%d %H:%M:%S')
 
-    print(f"[DEBUG] 下载数据：{start_str} ~ {end_str}")
+    print(f"[DEBUG] 下载数据：{yf_start} ~ {yf_end}")
 
-    df = yf.download(
-        SYMBOL,
-        interval="1m",
-        start=start_str,
-        end=end_str,
-        progress=False,
-        prepost=True,
-        auto_adjust=True
-    )
+    df = yf.download(SYMBOL, interval="1m", start=yf_start, end=yf_end, progress=False, prepost=True, auto_adjust=True)
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    if df.empty:
+        raise ValueError("下载失败或数据为空")
 
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
     df = df[df['Volume'] > 0]
-    df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    df.index = df.index.tz_localize('UTC').tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
 
     mask = pd.Series(False, index=df.index)
-    for o, c, early in sessions:
-        pre = (o - timedelta(hours=5, minutes=30), o)
-        mask |= (df.index >= pre[0]) & (df.index < pre[1])
-        mask |= (df.index >= o) & (df.index < c)
-        if not early:
-            post = (c, c + timedelta(hours=4))
-            mask |= (df.index >= post[0]) & (df.index < post[1])
+    for sess in sessions:
+        op, cl = sess['open'], sess['close']
+        pm_start, pm_end = op - timedelta(hours=5, minutes=30), op
+        mask |= (df.index >= pm_start) & (df.index < cl + timedelta(hours=4))
 
     df = df[mask]
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
@@ -114,30 +99,9 @@ def get_data():
     df.ffill(inplace=True)
     return df.dropna()
 
-# --------- 状态管理 ---------
-def load_last_signal():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
-    return {"position": "none"}
-
-def save_last_signal(state):
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
-
-# --------- 日志记录 ---------
-def log_signal_to_csv(timestamp, signal):
-    file_exists = Path(LOG_FILE).exists()
-    with open(LOG_FILE, mode="a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["timestamp", "signal"])
-        writer.writerow([timestamp.isoformat(), signal])
-
-# --------- 判断函数 ---------
+# --------- 信号判断 ---------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
-def macd_trending_up(row): return row['MACD'] > row['MACDs'] and row['MACDh'] > 0
-def macd_trending_down(row): return row['MACD'] < row['MACDs'] and row['MACDh'] < 0
+def macd_up(row): return row['MACD'] > row['MACDs'] and row['MACDh'] > 0
 
 def determine_strength(row, direction):
     if direction == "call":
@@ -148,78 +112,74 @@ def determine_strength(row, direction):
         elif row['RSI'] > 45: return "弱"
     return "中"
 
-def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 50 and row['MACDh'] > -0.1 and strong_volume(row)
-def check_put_entry(row): return row['Close'] < row['VWAP'] and row['RSI'] < 51 and row['MACDh'] < 0.15 and strong_volume(row)
+def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 52 and strong_volume(row) and macd_up(row)
+def check_put_entry(row): return row['Close'] < row['VWAP'] and row['RSI'] < 48 and strong_volume(row) and not macd_up(row)
 def check_call_exit(row): return row['RSI'] < 48 and strong_volume(row)
 def check_put_exit(row): return row['RSI'] > 52 and strong_volume(row)
-def allow_call_reentry(row, prev): return prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row)
-def allow_put_reentry(row, prev): return prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row)
 
-# --------- 核心信号逻辑 ---------
-def generate_signal(row, prev, state):
-    current_pos = state.get("position", "none")
-    time_est = row.name.tz_convert(EST)
+# --------- 状态读取保存 ---------
+def load_last_signal():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"position": "none"}
 
-    if current_pos == "call" and check_call_exit(row):
+def save_last_signal(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+# --------- 信号生成 ---------
+def generate_signal(df):
+    if len(df) < 6:
+        return None, None
+    row = df.iloc[-1]
+    state = load_last_signal()
+    pos = state.get("position", "none")
+    ts = row.name.tz_convert(EST)
+
+    if pos == "call" and check_call_exit(row):
         state["position"] = "none"
+        save_last_signal(state)
         if check_put_entry(row):
-            strength = determine_strength(row, "put")
             state["position"] = "put"
-            return time_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
-        return time_est, f"⚠️ Call 出场信号"
+            save_last_signal(state)
+            return ts, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{determine_strength(row, 'put')}）"
+        return ts, "⚠️ Call 出场信号"
 
-    elif current_pos == "put" and check_put_exit(row):
+    if pos == "put" and check_put_exit(row):
         state["position"] = "none"
+        save_last_signal(state)
         if check_call_entry(row):
-            strength = determine_strength(row, "call")
             state["position"] = "call"
-            return time_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
-        return time_est, f"⚠️ Put 出场信号"
+            save_last_signal(state)
+            return ts, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{determine_strength(row, 'call')}）"
+        return ts, "⚠️ Put 出场信号"
 
-    elif current_pos == "none":
+    if pos == "none":
         if check_call_entry(row):
-            strength = determine_strength(row, "call")
             state["position"] = "call"
-            return time_est, f"📈 主升浪 Call 入场（{strength}）"
+            save_last_signal(state)
+            return ts, f"📈 主升浪 Call 入场（{determine_strength(row, 'call')}）"
         elif check_put_entry(row):
-            strength = determine_strength(row, "put")
             state["position"] = "put"
-            return time_est, f"📉 主跌浪 Put 入场（{strength}）"
-        elif allow_call_reentry(row, prev):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            return time_est, f"📈 趋势回补 Call 再入场（{strength}）"
-        elif allow_put_reentry(row, prev):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            return time_est, f"📉 趋势回补 Put 再入场（{strength}）"
+            save_last_signal(state)
+            return ts, f"📉 主跌浪 Put 入场（{determine_strength(row, 'put')}）"
 
     return None, None
 
-# --------- 主入口 ---------
+# --------- 主流程 ---------
 def main():
     print(f"[🔁 回测开始] {get_est_now()}")
     try:
         df = get_data()
-        state = load_last_signal()
-        signal_count = 0
-
-        for i in range(1, len(df)):
-            row, prev = df.iloc[i], df.iloc[i - 1]
-            time_signal, signal = generate_signal(row, prev, state.copy())
-            if signal:
-                print(f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
-                save_last_signal(state)
-                log_signal_to_csv(time_signal, signal)
-                signal_count += 1
-
-        if signal_count == 0:
-            print("[ℹ️] 当日无交易信号")
+        ts, signal = generate_signal(df)
+        if ts and signal:
+            print(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
         else:
-            print(f"[✅] 共记录 {signal_count} 条信号至 signal_log.csv")
-
+            print("[✅ 回测完成] 无信号")
     except Exception as e:
         print(f"[❌ 回测失败] {e}")
 
 if __name__ == "__main__":
     main()
+
