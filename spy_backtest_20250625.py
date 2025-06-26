@@ -105,7 +105,7 @@ def backtest(df):
     return logs
 
 if __name__ == "__main__":
-    df = yf.download("SPY", interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
+    df = yf.download("SPY", interval="1m", start="2025-06-25", end="2025-06-26", progress=False, auto_adjust=False)
     df = compute_indicators(df)
     signals = backtest(df)
     for s in signals:
