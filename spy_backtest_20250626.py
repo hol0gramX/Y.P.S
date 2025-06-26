@@ -46,8 +46,9 @@ def compute_macd(df):
 
 # ========= 趋势判断（5min） =========
 def get_latest_5min_trend(df_5min, ts):
-    recent = df_5min.loc[df_5min.index <= ts].last("2h")
-    if len(recent) < 10:
+    subset = df_5min.loc[df_5min.index <= ts]
+    recent = subset.loc[subset.index >= ts - timedelta(hours=2)]
+    if recent.empty or len(recent) < 10:
         return None
     ma20 = recent['Close'].rolling(20).mean()
     latest = recent.iloc[-1]['Close']
