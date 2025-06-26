@@ -2,8 +2,11 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-STATE_FILE = "last_signal_backtest.json"
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 SYMBOL = "SPY"
+STATE_FILE = "last_signal_backtest.json"
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -25,10 +28,10 @@ def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
 def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs'])
+    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
 
 def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs'])
+    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
 
 def determine_strength(row, direction):
     strength = "中"
@@ -47,14 +50,16 @@ def determine_strength(row, direction):
 def check_call_entry(row):
     return (
         float(row['Close']) > float(row['VWAP']) and
-        float(row['RSI']) > 50 and
+        float(row['RSI']) > 52 and
+        strong_volume(row) and
         macd_trending_up(row)
     )
 
 def check_put_entry(row):
     return (
         float(row['Close']) < float(row['VWAP']) and
-        float(row['RSI']) < 50 and
+        float(row['RSI']) < 48 and
+        strong_volume(row) and
         macd_trending_down(row)
     )
 
@@ -68,7 +73,7 @@ def load_last_signal():
     return {"position": "none"}
 
 def save_last_signal(state):
-    pass
+    pass  # No file saving for backtest
 
 def backtest():
     est = "America/New_York"
@@ -91,37 +96,39 @@ def backtest():
     for idx, row in df.iterrows():
         current_pos = state["position"]
 
-        if idx.tz is None:
+        # 时间转换（统一 EST）
+        if idx.tzinfo is None:
             est_time = idx.tz_localize('UTC').tz_convert(est)
         else:
             est_time = idx.tz_convert(est)
 
         if current_pos == "call" and check_call_exit(row):
-            results.append((est_time, "Call 出场"))
+            results.append((est_time, "⚠️ Call 出场信号"))
             state["position"] = "none"
             if check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
-                results.append((est_time, f"反手 Put 入场（{strength}）"))
+                results.append((est_time, f"🔁 反手 Put 入场（{strength}）"))
 
         elif current_pos == "put" and check_put_exit(row):
-            results.append((est_time, "Put 出场"))
+            results.append((est_time, "⚠️ Put 出场信号"))
             state["position"] = "none"
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
-                results.append((est_time, f"反手 Call 入场（{strength}）"))
+                results.append((est_time, f"🔁 反手 Call 入场（{strength}）"))
 
         elif current_pos == "none":
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
-                results.append((est_time, f"Call 入场（{strength}）"))
+                results.append((est_time, f"📈 主升浪 Call 入场（{strength}）"))
             elif check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
-                results.append((est_time, f"Put 入场（{strength}）"))
+                results.append((est_time, f"📉 主跌浪 Put 入场（{strength}）"))
 
+    # 打印结果
     for time, signal in results:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
