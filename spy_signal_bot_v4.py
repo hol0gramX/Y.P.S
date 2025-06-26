@@ -22,6 +22,31 @@ EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 LOG_FILE = "signal_log.csv"
 
+# --------- 时间工具 ---------
+def get_est_now():
+    return datetime.now(tz=EST)
+
+# 初始化一次性 schedule（替代重复 schedule 查询）
+today = get_est_now().date()
+today_schedule = nasdaq.schedule(start_date=today, end_date=today)
+
+def get_market_open_close():
+    if today_schedule.empty: return None, None
+    row = today_schedule.iloc[0]
+    return row['market_open'].tz_convert(EST), row['market_close'].tz_convert(EST)
+
+def is_early_close():
+    if today_schedule.empty: return False
+    cl = today_schedule.iloc[0]['market_close'].tz_convert(EST)
+    return cl < pd.Timestamp.combine(today, time(16, 0)).tz_localize(EST)
+
+def is_market_open_now():
+    now = get_est_now()
+    if today_schedule.empty: return False
+    op = today_schedule.iloc[0]['market_open'].tz_convert(EST)
+    cl = today_schedule.iloc[0]['market_close'].tz_convert(EST)
+    return op <= now <= cl
+
 # --------- 日志函数 ---------
 def log_signal_to_csv(timestamp, signal):
     file_exists = Path(LOG_FILE).exists()
@@ -50,31 +75,6 @@ def save_last_signal(state):
     requests.patch(f"https://api.github.com/gists/{GIST_ID}", headers=headers, json=data)
 
 load_last_signal = load_last_signal_from_gist
-
-# --------- 时间工具 ---------
-def get_est_now():
-    return datetime.now(tz=EST)
-
-def get_trading_days(start, end):
-    return nasdaq.schedule(start_date=start, end_date=end).index.tz_localize(None)
-
-def get_market_open_close(d):
-    sch = nasdaq.schedule(start_date=d, end_date=d)
-    if sch.empty: return None, None
-    return sch.iloc[0]['market_open'].tz_convert(EST), sch.iloc[0]['market_close'].tz_convert(EST)
-
-def is_early_close(d):
-    sch = nasdaq.schedule(start_date=d, end_date=d)
-    return not sch.empty and sch.iloc[0]['market_close'].tz_convert(EST) < pd.Timestamp.combine(d, time(16, 0)).tz_localize(EST)
-
-def is_market_open_now():
-    now = get_est_now()
-    sch = nasdaq.schedule(start_date=now.date(), end_date=now.date())
-    if sch.empty:
-        return False
-    market_open = sch.iloc[0]['market_open'].tz_convert(EST)
-    market_close = sch.iloc[0]['market_close'].tz_convert(EST)
-    return market_open <= now <= market_close
 
 # --------- 技术指标 ---------
 def compute_rsi(s, length=14):
@@ -106,14 +106,15 @@ def get_5min_trend():
 def get_data():
     now = get_est_now()
     today = now.date()
-    trade_days = get_trading_days(today - timedelta(days=10), today)
+    trade_days = nasdaq.schedule(start_date=today - timedelta(days=10), end_date=today).index.tz_localize(None)
     trade_days = trade_days[trade_days <= pd.Timestamp(today)]
     recent = trade_days[-2:]
 
     sessions = []
     for d in recent:
-        op, cl = get_market_open_close(d.date())
-        early = is_early_close(d.date())
+        op, cl = nasdaq.schedule(start_date=d, end_date=d).iloc[0][['market_open', 'market_close']]
+        op, cl = op.tz_convert(EST), cl.tz_convert(EST)
+        early = cl < pd.Timestamp.combine(d, time(16, 0)).tz_localize(EST)
         sessions.append((op, cl, early))
 
     start_dt = sessions[0][0]
@@ -129,8 +130,7 @@ def get_data():
     for op, cl, early in sessions:
         intervals = [(op - timedelta(hours=5, minutes=30), op), (op, cl)]
         if not early:
-            pm_start, pm_end = cl, cl + timedelta(hours=4)
-            intervals.append((pm_start, pm_end))
+            intervals.append((cl, cl + timedelta(hours=4)))
         for s, e in intervals:
             mask |= (df.index >= s) & (df.index < e)
 
@@ -163,11 +163,8 @@ def allow_put_reentry(row, prev): return prev['Close'] > prev['VWAP'] and row['C
 # --------- 收盘清仓 ---------
 def check_market_closed_and_clear():
     now = get_est_now()
-    today = now.date()
-    sch = nasdaq.schedule(start_date=today, end_date=today)
-    if sch.empty:
-        return False
-    close_time = sch.iloc[0]['market_close'].tz_convert(EST)
+    if today_schedule.empty: return False
+    close_time = today_schedule.iloc[0]['market_close'].tz_convert(EST)
     if now > close_time + timedelta(minutes=1):
         state = load_last_signal()
         if state.get("position", "none") != "none":
@@ -231,7 +228,7 @@ def generate_signal(df):
 
     return None, None
 
-# --------- 发送通知 ---------
+# --------- 通知 ---------
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
         print("[通知] DISCORD_WEBHOOK_URL 未设置")
