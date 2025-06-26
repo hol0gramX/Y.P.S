@@ -8,11 +8,77 @@ import yfinance as yf
 import pandas_ta as ta
 import pandas_market_calendars as mcal
 
-STATE_FILE = os.path.abspath("last_signal.json")
+# --------- Gist 相关配置 ---------
+GIST_ID = "7490de39ccc4e20445ef576832bea34b"  # 你的 Gist ID
+GIST_FILENAME = "last_signal.json"
+GIST_TOKEN = os.environ.get("GIST_TOKEN")  # 你在 GitHub Secret 里设置的 TOKEN_GIST 需要改成 GIST_TOKEN
+
+# --------- 常规变量 ---------
 SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
+
+# --------- 用于读写 Gist 的函数 ---------
+def load_last_signal_from_gist():
+    if not GIST_TOKEN:
+        print("[DEBUG] GIST_TOKEN 未设置，无法读取持仓状态")
+        return {"position": "none"}
+
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {"Authorization": f"token {GIST_TOKEN}"}
+    try:
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        gist_data = r.json()
+        content = gist_data["files"][GIST_FILENAME]["content"]
+        state = json.loads(content)
+        print(f"[DEBUG] 从 Gist 读取持仓状态: {state}")
+        return state
+    except Exception as e:
+        print(f"[DEBUG] 从 Gist 读取持仓状态失败: {e}")
+        return {"position": "none"}
+
+def save_last_signal_to_gist(state):
+    if not GIST_TOKEN:
+        print("[DEBUG] GIST_TOKEN 未设置，无法保存持仓状态")
+        return
+
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    headers = {
+        "Authorization": f"token {GIST_TOKEN}",
+        "Accept": "application/vnd.github+json"
+    }
+    try:
+        # 先获取 gist 当前内容，防止覆盖其他文件（可选）
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        gist_data = r.json()
+
+        # 更新我们文件的内容
+        gist_data["files"][GIST_FILENAME]["content"] = json.dumps(state)
+
+        # PATCH 更新 gist
+        r2 = requests.patch(url, headers=headers, json={
+            "files": {
+                GIST_FILENAME: {
+                    "content": json.dumps(state)
+                }
+            }
+        })
+        r2.raise_for_status()
+        print(f"[DEBUG] 成功保存持仓状态到 Gist: {state}")
+    except Exception as e:
+        print(f"[DEBUG] 保存持仓状态到 Gist 失败: {e}")
+
+# --------- 持仓状态接口改用 Gist ---------
+def load_last_signal():
+    return load_last_signal_from_gist()
+
+def save_last_signal(state):
+    save_last_signal_to_gist(state)
+
+# --------- 下面是你原来的业务逻辑代码 ---------
 
 def get_est_now():
     return datetime.now(tz=EST)
@@ -145,20 +211,6 @@ def check_call_exit(row):
 def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
-def load_last_signal():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            state = json.load(f)
-            print(f"[DEBUG] 读取持仓状态: {state}")
-            return state
-    print("[DEBUG] 状态文件不存在，默认无仓位")
-    return {"position": "none"}
-
-def save_last_signal(state):
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
-    print(f"[DEBUG] 保存持仓状态: {state}")
-
 def generate_signal(df):
     if len(df) < 6:
         return None, None
@@ -218,9 +270,8 @@ def send_to_discord(message):
 
 def main():
     print(f"[DEBUG] 当前工作目录: {os.getcwd()}")
-    print(f"[DEBUG] 状态文件路径: {STATE_FILE}")
     state = load_last_signal()
-    print(f"[DEBUG] 程序启动时仓位状态: {state['position']}")
+    print(f"[DEBUG] 程序启动时仓位状态: {state.get('position','none')}")
     try:
         df = get_data()
         time_signal, signal = generate_signal(df)
@@ -234,8 +285,8 @@ def main():
     except Exception as e:
         print("Error:", e)
 
-
 if __name__ == "__main__":
     main()
+
 
 
