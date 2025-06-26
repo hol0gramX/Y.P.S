@@ -1,7 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-from datetime import time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 SYMBOL = "SPY"
@@ -69,15 +69,17 @@ def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
+    # 回测不保存状态，初始化为无仓位
     return {"position": "none"}
 
 def save_last_signal(state):
-    pass  # Backtest 不存文件
+    # 回测中不写文件
+    pass
 
 def backtest():
     est = ZoneInfo("America/New_York")
 
-    # 下载包含盘前盘后数据
+    # 下载6月24日盘后和6月25日含盘前盘中数据，prepost=True包含盘前盘后
     df = yf.download(
         SYMBOL,
         interval="1m",
@@ -86,35 +88,31 @@ def backtest():
         progress=False,
         prepost=True
     )
-    # 转换时区
-    df.index = df.index.tz_localize('UTC').tz_convert(est)
 
-    # 过滤 6月24日16:00-20:00盘后 和 6月25日4:00开始的盘前盘中盘后
-    df_filtered = pd.concat([
-        df.loc[
-            (df.index.date == pd.to_datetime("2025-06-24").date()) &
-            (df.index.time >= time(16, 0)) & (df.index.time <= time(20, 0))
-        ],
-        df.loc[
-            (df.index.date == pd.to_datetime("2025-06-25").date()) &
-            (df.index.time >= time(4, 0))
-        ]
-    ]).sort_index()
+    # 处理时区，避免重复localize错误
+    if df.index.tz is None:
+        df.index = df.index.tz_localize('UTC').tz_convert(est)
+    else:
+        df.index = df.index.tz_convert(est)
+
+    # 清理数据，确保没有缺失
+    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
 
     # 计算指标
-    df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
-    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
-    df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
-    df_filtered = compute_macd(df_filtered)
-    df_filtered = df_filtered.dropna()
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df = compute_macd(df)
+    df = df.dropna()
 
     state = load_last_signal()
     results = []
 
-    for idx, row in df_filtered.iterrows():
+    for idx, row in df.iterrows():
         current_pos = state["position"]
 
-        est_time = idx  # 已是美东时间
+        # 时间已经是EST，无需转换，直接用
+        est_time = idx
 
         if current_pos == "call" and check_call_exit(row):
             results.append((est_time, "⚠️ Call 出场信号"))
@@ -142,6 +140,7 @@ def backtest():
                 state["position"] = "put"
                 results.append((est_time, f"📉 主跌浪 Put 入场（{strength}）"))
 
+    # 输出信号
     for time, signal in results:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
