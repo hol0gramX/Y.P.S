@@ -74,11 +74,17 @@ def get_data():
     start_dt = sessions[0][0]
     end_dt = sessions[-1][1] + timedelta(minutes=1)
 
+    # ❗️关键修复：转为 UTC 后去掉 tz 信息，避免 tz-aware 冲突
+    start_str = start_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%d %H:%M:%S')
+    end_str = end_dt.astimezone(ZoneInfo("UTC")).strftime('%Y-%m-%d %H:%M:%S')
+
+    print(f"[DEBUG] 下载数据：{start_str} ~ {end_str}")
+
     df = yf.download(
         SYMBOL,
         interval="1m",
-        start=start_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S'),
-        end=end_dt.tz_convert('UTC').strftime('%Y-%m-%d %H:%M:%S'),
+        start=start_str,
+        end=end_str,
         progress=False,
         prepost=True,
         auto_adjust=True
