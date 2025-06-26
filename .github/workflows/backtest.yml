@@ -22,4 +22,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run backtest script
-        run: python spy_backtest_20250625.py
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: python spy_backtest_20250626.py
