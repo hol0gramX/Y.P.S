@@ -148,12 +148,16 @@ def check_put_exit(row):
 def load_last_signal():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+            state = json.load(f)
+            print(f"[DEBUG] 读取持仓状态: {state}")
+            return state
+    print("[DEBUG] 状态文件不存在，默认无仓位")
     return {"position": "none"}
 
 def save_last_signal(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
+    print(f"[DEBUG] 保存持仓状态: {state}")
 
 def generate_signal(df):
     if len(df) < 6:
@@ -213,6 +217,10 @@ def send_to_discord(message):
         print("发送 Discord 失败:", e)
 
 def main():
+    print(f"[DEBUG] 当前工作目录: {os.getcwd()}")
+    print(f"[DEBUG] 状态文件路径: {STATE_FILE}")
+    state = load_last_signal()
+    print(f"[DEBUG] 程序启动时仓位状态: {state['position']}")
     try:
         df = get_data()
         time_signal, signal = generate_signal(df)
@@ -225,6 +233,7 @@ def main():
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无交易信号")
     except Exception as e:
         print("Error:", e)
+
 
 if __name__ == "__main__":
     main()
