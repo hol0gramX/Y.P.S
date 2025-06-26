@@ -1,4 +1,4 @@
-import os
+import os 
 import json
 import requests
 import pandas as pd
@@ -16,19 +16,19 @@ def get_est_now():
 
 def is_market_open():
     now = get_est_now()
-    return time(9, 30) <= now.time() < time(16, 0)
+    return now.time() >= datetime.strptime("09:30", "%H:%M").time() and now.time() < datetime.strptime("16:00", "%H:%M").time()
 
 def is_premarket():
     now = get_est_now()
-    return time(4, 0) <= now.time() < time(9, 30)
+    return now.time() >= datetime.strptime("04:00", "%H:%M").time() and now.time() < datetime.strptime("09:30", "%H:%M").time()
 
 def is_aftermarket():
     now = get_est_now()
-    return time(16, 0) <= now.time() < time(20, 0)
+    return now.time() >= datetime.strptime("16:00", "%H:%M").time() and now.time() < datetime.strptime("20:00", "%H:%M").time()
 
 def is_outside_trading():
     now = get_est_now()
-    return now.time() < time(4, 0) or now.time() >= time(20, 0)
+    return now.time() < datetime.strptime("04:00", "%H:%M").time() or now.time() >= datetime.strptime("20:00", "%H:%M").time()
 
 def compute_rsi(series, length=14):
     delta = series.diff()
@@ -40,12 +40,13 @@ def compute_rsi(series, length=14):
     return 100 - (100 / (1 + rs))
 
 def compute_macd(df):
+    df = df.copy()  # 防止 SettingWithCopyWarning
     macd = ta.macd(df['Close'])
     if macd is None or macd.isna().all().any():
         raise ValueError("MACD计算失败，结果为空或字段缺失")
-    df.loc[:, 'MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df.loc[:, 'MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df.loc[:, 'MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
+    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
+    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
 def get_data():
@@ -55,6 +56,7 @@ def get_data():
     df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
     if df.empty:
         raise ValueError("无法获取数据")
+    
     df.index = df.index.tz_convert("America/New_York")
 
     now = get_est_now()
@@ -64,14 +66,14 @@ def get_data():
     df_filtered = df[
         ((df.index.date == yesterday) & (df.index.time >= time(16, 0)) & (df.index.time < time(20, 0))) |
         ((df.index.date == today) & (df.index.time >= time(4, 0)) & (df.index.time < time(16, 0)))
-    ]
+    ].copy()  # 这里必须加 copy() 避免 SettingWithCopyWarning
 
     if len(df_filtered) < 30:
         raise ValueError("数据行数不足，无法计算指标")
 
-    df_filtered.loc[:, 'Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
-    df_filtered.loc[:, 'RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
-    df_filtered.loc[:, 'VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
+    df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
+    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
+    df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
     df_filtered = compute_macd(df_filtered)
     return df_filtered.dropna()
 
@@ -140,9 +142,8 @@ def generate_signal(df):
 
     time_index = row.name
     if time_index.tzinfo is None:
-        time_index = time_index.tz_localize("America/New_York")
-    else:
-        time_index = time_index.tz_convert("America/New_York")
+        time_index = time_index.tz_localize("UTC")
+    time_index_est = time_index.tz_convert(ZoneInfo("America/New_York"))
 
     if current_pos == "call" and check_call_exit(row):
         state["position"] = "none"
@@ -151,8 +152,8 @@ def generate_signal(df):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
-        return time_index, "⚠️ Call 出场信号"
+            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}）"
+        return time_index_est, "⚠️ Call 出场信号"
 
     elif current_pos == "put" and check_put_exit(row):
         state["position"] = "none"
@@ -161,20 +162,20 @@ def generate_signal(df):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
-        return time_index, "⚠️ Put 出场信号"
+            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}）"
+        return time_index_est, "⚠️ Put 出场信号"
 
     elif current_pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index, f"📈 主升浪 Call 入场（{strength}）"
+            return time_index_est, f"📈 主升浪 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index, f"📉 主跌浪 Put 入场（{strength}）"
+            return time_index_est, f"📉 主跌浪 Put 入场（{strength}）"
 
     return None, None
 
@@ -201,6 +202,7 @@ def main():
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 📊 {'盘前' if is_premarket() else '盘后'}数据采集完成，数据时间: {df.index[0]} ~ {df.index[-1]}")
             return
 
+        # 盘中才生成信号
         time_signal, signal = generate_signal(df)
         if signal and time_signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
@@ -213,4 +215,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
