@@ -232,29 +232,37 @@ def send_to_discord(message):
 
 # --------- 主流程 ---------
 def main():
-    now = get_est_now()
-    print("="*60)
-    print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    state = load_last_signal()
-    print(f"📦 当前仓位状态：{state.get('position', 'none')}")
-    print("-"*60)
-
     try:
+        now = get_est_now()
+        print("=" * 60)
+        print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        state = load_last_signal()
+        print(f"📦 当前仓位状态：{state.get('position', 'none')}")
+        print("-" * 60)
+
+        # 收盘后清仓逻辑
         if check_market_closed_and_clear():
             return
+
+        # 非盘中跳过信号检测
         if not is_market_open_now():
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕒 盘前/盘后，跳过信号判断")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕗 盘前/盘后，不进行信号判断")
             return
+
+        # 获取数据并生成信号
         df = get_data()
         time_signal, signal = generate_signal(df)
+
         if signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
         else:
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 无交易信号")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
+
     except Exception as e:
         print("[错误]", e)
+
 
 if __name__ == "__main__":
     main()
