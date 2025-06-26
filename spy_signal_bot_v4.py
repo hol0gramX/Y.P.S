@@ -106,9 +106,9 @@ def get_5min_trend():
 def get_data():
     now = get_est_now()
     today = now.date()
-    trade_days = get_trading_days(today - timedelta(days=14), today)
+    trade_days = get_trading_days(today - timedelta(days=10), today)
     trade_days = trade_days[trade_days <= pd.Timestamp(today)]
-    recent = trade_days[-3:]
+    recent = trade_days[-2:]
 
     sessions = []
     for d in recent:
