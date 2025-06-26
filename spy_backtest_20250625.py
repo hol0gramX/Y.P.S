@@ -2,7 +2,7 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 
-def compute_rsi(series, length=14):
+def compute_rsi(series, length=6):
     delta = series.diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -16,16 +16,14 @@ def compute_macd(df):
     df['MACD'] = macd['MACD_12_26_9'].fillna(0)
     df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+    df['MACD_slope'] = df['MACDh'].diff().fillna(0)
     return df
 
 def strong_volume(row):
     return float(row['Volume']) >= float(row['Vol_MA5'])
 
-def macd_trending_up(row):
-    return float(row['MACD']) > float(row['MACDs']) and float(row['MACDh']) > 0
-
-def macd_trending_down(row):
-    return float(row['MACD']) < float(row['MACDs']) and float(row['MACDh']) < 0
+def is_trending_bar(row):
+    return float(row['Bar_Size']) > float(row['Bar_Size_MA'])
 
 def determine_strength(row, direction):
     strength = "中"
@@ -43,34 +41,41 @@ def determine_strength(row, direction):
 
 def check_call_entry(row):
     return (
-        float(row['Close']) > float(row['VWAP']) and
-        float(row['RSI']) > 52 and
+        row['Close'] > row['VWAP'] and
+        row['RSI'] > 52 and
+        row['MACD_slope'] > 0 and
+        row['MACDh'] > 0 and
         strong_volume(row) and
-        macd_trending_up(row)
+        is_trending_bar(row)
     )
 
 def check_put_entry(row):
     return (
-        float(row['Close']) < float(row['VWAP']) and
-        float(row['RSI']) < 48 and
+        row['Close'] < row['VWAP'] and
+        row['RSI'] < 48 and
+        row['MACD_slope'] < 0 and
+        row['MACDh'] < 0 and
         strong_volume(row) and
-        macd_trending_down(row)
+        is_trending_bar(row)
     )
 
 def check_call_exit(row):
-    return float(row['RSI']) < 48 and strong_volume(row)
+    return row['RSI'] < 48 and strong_volume(row)
 
 def check_put_exit(row):
-    return float(row['RSI']) > 52 and strong_volume(row)
+    return row['RSI'] > 52 and strong_volume(row)
 
 def check_pre_call(row):
-    return float(row['RSI']) > 55 and float(row['MACDh']) > 0
+    return row['RSI'] > 55 and row['MACDh'] > 0 and row['MACD_slope'] > 0
 
 def check_pre_put(row):
-    return float(row['RSI']) < 45 and float(row['MACDh']) < 0
+    return row['RSI'] < 45 and row['MACDh'] < 0 and row['MACD_slope'] < 0
 
 def is_choppy(row):
-    return abs(float(row['MACDh'])) < 0.1 and 45 <= float(row['RSI']) <= 55
+    return (
+        abs(row['MACD_slope']) < 0.01 and
+        row['ATR'] < row['ATR_MA']
+    )
 
 def backtest():
     est = "America/New_York"
@@ -79,11 +84,15 @@ def backtest():
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
+    df = df.dropna(subset=['Open', 'High', 'Low', 'Close', 'Volume'])
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'], 14).fillna(50)
+    df['RSI'] = compute_rsi(df['Close'], 6).fillna(50)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df).dropna()
+    df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+    df['ATR_MA'] = df['ATR'].rolling(20).mean()
+    df['Bar_Size'] = abs(df['Close'] - df['Open'])
+    df['Bar_Size_MA'] = df['Bar_Size'].rolling(20).mean()
 
     position = "none"
     results = []
