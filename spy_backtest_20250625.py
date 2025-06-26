@@ -1,8 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-
-from datetime import datetime
+from datetime import time
 from zoneinfo import ZoneInfo
 
 SYMBOL = "SPY"
@@ -19,9 +18,9 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'])
-    df.loc[:, 'MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df.loc[:, 'MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df.loc[:, 'MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
+    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
+    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
 def strong_volume(row):
@@ -70,66 +69,83 @@ def check_put_exit(row):
     return float(row['RSI']) > 52 and strong_volume(row)
 
 def load_last_signal():
-    # 回测时默认无仓位起点
     return {"position": "none"}
 
 def save_last_signal(state):
-    # 回测不存盘，忽略
-    pass
+    pass  # Backtest 不存文件
 
 def backtest():
     est = ZoneInfo("America/New_York")
-    # 下载6月25日全天数据，1分钟间隔，时间范围包含6月25日开盘
-    df = yf.download(SYMBOL, interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df = df.dropna(subset=['High', 'Low', 'Close', 'Volume'])
-
+    # 下载包含盘前盘后数据
+    df = yf.download(
+        SYMBOL,
+        interval="1m",
+        start="2025-06-24",
+        end="2025-06-26",
+        progress=False,
+        prepost=True
+    )
+    # 转换时区
     df.index = df.index.tz_localize('UTC').tz_convert(est)
 
-    df.loc[:, 'Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df.loc[:, 'RSI'] = compute_rsi(df['Close'], 14).fillna(50)
-    df.loc[:, 'VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
-    df = df.dropna()
+    # 过滤 6月24日16:00-20:00盘后 和 6月25日4:00开始的盘前盘中盘后
+    df_filtered = pd.concat([
+        df.loc[
+            (df.index.date == pd.to_datetime("2025-06-24").date()) &
+            (df.index.time >= time(16, 0)) & (df.index.time <= time(20, 0))
+        ],
+        df.loc[
+            (df.index.date == pd.to_datetime("2025-06-25").date()) &
+            (df.index.time >= time(4, 0))
+        ]
+    ]).sort_index()
+
+    # 计算指标
+    df_filtered['Vol_MA5'] = df_filtered['Volume'].rolling(5).mean()
+    df_filtered['RSI'] = compute_rsi(df_filtered['Close'], 14).fillna(50)
+    df_filtered['VWAP'] = (df_filtered['Close'] * df_filtered['Volume']).cumsum() / df_filtered['Volume'].cumsum()
+    df_filtered = compute_macd(df_filtered)
+    df_filtered = df_filtered.dropna()
 
     state = load_last_signal()
     results = []
 
-    for idx, row in df.iterrows():
+    for idx, row in df_filtered.iterrows():
         current_pos = state["position"]
 
+        est_time = idx  # 已是美东时间
+
         if current_pos == "call" and check_call_exit(row):
-            results.append((idx, "⚠️ Call 出场信号"))
+            results.append((est_time, "⚠️ Call 出场信号"))
             state["position"] = "none"
             if check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
-                results.append((idx, f"🔁 反手 Put 入场（{strength}）"))
+                results.append((est_time, f"🔁 反手 Put 入场（{strength}）"))
 
         elif current_pos == "put" and check_put_exit(row):
-            results.append((idx, "⚠️ Put 出场信号"))
+            results.append((est_time, "⚠️ Put 出场信号"))
             state["position"] = "none"
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
-                results.append((idx, f"🔁 反手 Call 入场（{strength}）"))
+                results.append((est_time, f"🔁 反手 Call 入场（{strength}）"))
 
         elif current_pos == "none":
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
-                results.append((idx, f"📈 主升浪 Call 入场（{strength}）"))
+                results.append((est_time, f"📈 主升浪 Call 入场（{strength}）"))
             elif check_put_entry(row):
                 strength = determine_strength(row, "put")
                 state["position"] = "put"
-                results.append((idx, f"📉 主跌浪 Put 入场（{strength}）"))
+                results.append((est_time, f"📉 主跌浪 Put 入场（{strength}）"))
 
     for time, signal in results:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}")
 
 if __name__ == "__main__":
     backtest()
+
 
