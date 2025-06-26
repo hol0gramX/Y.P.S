@@ -12,9 +12,9 @@ EST = ZoneInfo("America/New_York")
 def get_est_now():
     return datetime.now(tz=EST)
 
-def load_signal_log(file_path="signal_log.csv"):
+def load_signal_log(file_path):
     if not os.path.exists(file_path):
-        print("[信息] 未找到 signal_log.csv 文件")
+        print(f"[信息] 未找到信号文件：{file_path}")
         return pd.DataFrame()
     df = pd.read_csv(file_path, parse_dates=['timestamp'])
     if df['timestamp'].dt.tz is None:
@@ -66,7 +66,7 @@ def analyze_signals(signal_df, market_df):
                 issues.append((ts, label, "Put信号后无下跌延续"))
 
     if issues:
-        print("[分析结果] 策略潜在问题：")
+        print("[分析结果] ⚠️ 策略潜在问题：")
         for ts, label, reason in issues:
             print(f"- {ts.strftime('%Y-%m-%d %H:%M')} | {label} | ⚠️ {reason}")
     else:
@@ -75,10 +75,17 @@ def analyze_signals(signal_df, market_df):
 # ----------- 主流程 -----------
 def main():
     try:
-        print(f"[DEBUG] 当前时间：{get_est_now().strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        signals = load_signal_log()
+        now = get_est_now()
+        print(f"[DEBUG] 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
+        # 自动定位今天的 signal log 文件
+        today_str = now.strftime("%Y-%m-%d")
+        file_path = f"signal_log_{today_str}.csv"
+
+        signals = load_signal_log(file_path)
         market = download_market_data()
         analyze_signals(signals, market)
+
     except Exception as e:
         print("[错误] 分析失败：", e)
 
