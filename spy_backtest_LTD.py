@@ -1,132 +1,100 @@
 import os
+import json
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_market_calendars as mcal
 
-# ========= 配置 =========
+# ========= 配置区域 =========
+STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-PREMARKET_START = datetime.strptime("04:00:00", "%H:%M:%S").time()
-REGULAR_START = datetime.strptime("09:30:00", "%H:%M:%S").time()
+nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========= 数据获取 =========
-def fetch_data():
-    end = datetime.now(tz=EST)
-    start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
-    df.columns = df.columns.get_level_values(0)
-    df.index.name = "Datetime"
-    if not df.index.tz:
-        df.index = df.index.tz_localize("UTC").tz_convert(EST)
-    else:
-        df.index = df.index.tz_convert(EST)
-    df = df[~df.index.duplicated(keep='last')]
+# ========= 工具函数 =========
+def get_est_now():
+    return datetime.now(tz=EST)
 
-    df.ta.rsi(length=14, append=True)
-    macd = df.ta.macd(fast=12, slow=26, signal=9)
-    bbands = df.ta.bbands(length=20, std=2.0)
-    df = pd.concat([df, macd, bbands], axis=1)
+def is_market_open(dt):
+    schedule = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
+    return not schedule.empty and schedule.iloc[0]['market_open'].tz_convert(EST).time() <= dt.time() <= schedule.iloc[0]['market_close'].tz_convert(EST).time()
 
-    df["RSI"] = df["RSI_14"]
-    df["MACD"] = df["MACD_12_26_9"]
-    df["MACDh"] = df["MACDh_12_26_9"]
-    df["MACDs"] = df["MACDs_12_26_9"]
-    df = df.dropna()
-    return df
+def get_strength_text(level):
+    return "强" if level >= 2 else "中" if level == 1 else "弱"
 
-# ========= RSI 斜率 =========
-def calculate_rsi_slope(df, period=5):
-    rsi = df["RSI"]
-    slope = (rsi - rsi.shift(period)) / period
-    return slope
+# ========= 状态管理 =========
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {"position": None, "last_signal": None}
 
-# ========= 布林带反弹判断 =========
-def allow_bollinger_rebound(row, prev_row, direction):
-    if direction == "CALL":
-        return (
-            prev_row["Close"] < prev_row["BBL_20_2.0"] and
-            row["Close"] > row["BBL_20_2.0"] and
-            row["RSI"] > 48 and row["MACD"] > 0
-        )
-    elif direction == "PUT":
-        return (
-            prev_row["Close"] > prev_row["BBU_20_2.0"] and
-            row["Close"] < row["BBU_20_2.0"] and
-            row["RSI"] < 52 and row["MACD"] < 0
-        )
-    return False
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
-# ========= 信号生成 =========
-def generate_signals(df):
-    signals = []
-    in_position = None
-    last_date = None
+# ========= 主程序 =========
+start = (datetime.now(tz=EST) - timedelta(days=3)).strftime("%Y-%m-%d")
+end = (datetime.now(tz=EST) + timedelta(days=1)).strftime("%Y-%m-%d")
+df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
 
-    for i in range(5, len(df)):
-        row = df.iloc[i]
-        prev_row = df.iloc[i - 1]
-        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
+if df.empty:
+    raise Exception("数据获取失败")
 
-        # 🕒 如果当前时间早于 04:00，跳过
-        if row.name.time() < PREMARKET_START:
-            continue
+df.ta.rsi(length=14, append=True)
+df.ta.macd(append=True)
+df.dropna(inplace=True)
 
-        # 每天开盘前强制重置仓位为空（避免昨日状态延续）
-        if last_date and row.name.date() != last_date:
-            in_position = None
-        last_date = row.name.date()
+state = load_state()
+position = state["position"]
+last_signal = state["last_signal"]
 
-        rsi = row["RSI"]
-        macd = row["MACD"]
-        macdh = row["MACDh"]
-        slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
-        strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
+for idx, row in df.iterrows():
+    now = idx.tz_convert(EST)
+    t = now.time()
 
-        # === Call 入场 ===
-        if in_position != "CALL":
-            allow_call = (
-                (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or
-                allow_bollinger_rebound(row, prev_row, "CALL")
-            )
-            if allow_call:
-                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
-                in_position = "CALL"
-                continue
+    # === 盘后 16:00 清仓 ===
+    if t == time(16, 0):
+        position = None
+        last_signal = None
 
-        # === Call 出场 ===
-        if in_position == "CALL":
-            if rsi < 50 and slope < 0 and macd < 0:
-                signals.append(f"[{ts}] ⚠️ Call 出场信号（{strength}）")
-                in_position = None
+    # === 跳过盘前盘后信号判断，仅采集数据 ===
+    if time(4, 30) <= t < time(9, 30) or time(16, 0) <= t < time(20, 0):
+        continue
 
-        # === Put 入场 ===
-        if in_position != "PUT":
-            allow_put = (
-                (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or
-                allow_bollinger_rebound(row, prev_row, "PUT")
-            )
-            if allow_put:
-                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
-                in_position = "PUT"
-                continue
+    # === 指标 ===
+    rsi = row['RSI_14']
+    macd = row['MACD_12_26_9']
+    macdh = row['MACDh_12_26_9']
 
-        # === Put 出场 ===
-        if in_position == "PUT":
-            if rsi > 50 and slope > 0 and macd > 0:
-                signals.append(f"[{ts}] ⚠️ Put 出场信号（{strength}）")
-                in_position = None
+    # === 信号强度判断函数（示例） ===
+    def get_signal_strength():
+        score = 0
+        if abs(macdh) > 0.3: score += 1
+        if 50 < rsi < 70: score += 1
+        elif 30 < rsi <= 50: score += 0.5
+        return int(score)
 
-    return signals
+    signal_strength = get_signal_strength()
+    strength_text = get_strength_text(signal_strength)
+    ts = now.strftime("%Y-%m-%d %H:%M:%S")
 
-# ========= 回测入口 =========
-def backtest():
-    print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
-    df = fetch_data()
-    signals = generate_signals(df)
-    for sig in signals:
-        print(sig)
+    # === 示例信号逻辑 ===
+    if position is None:
+        if macdh > 0.1 and rsi > 50:
+            position = "call"
+            print(f"[{ts}] 📈 主升浪 Call 入场（{strength_text}）")
+        elif macdh < -0.1 and rsi < 50:
+            position = "put"
+            print(f"[{ts}] 📉 主跌浪 Put 入场（{strength_text}）")
+    elif position == "call" and macdh < 0:
+        print(f"[{ts}] ⚠️ Call 出场信号（{strength_text}）")
+        position = None
+    elif position == "put" and macdh > 0:
+        print(f"[{ts}] ⚠️ Put 出场信号（{strength_text}）")
+        position = None
 
-if __name__ == "__main__":
-    backtest()
+save_state({"position": position, "last_signal": last_signal})
+
