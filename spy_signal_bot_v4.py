@@ -19,7 +19,6 @@ EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 LOG_FILE = "signal_log.csv"
 
-# --------- 日志 ---------
 def log_signal_to_csv(timestamp, signal):
     date_str = timestamp.strftime("%Y-%m-%d")
     file_name = f"signal_log_{date_str}.csv"
@@ -30,7 +29,6 @@ def log_signal_to_csv(timestamp, signal):
             writer.writerow(["timestamp", "signal"])
         writer.writerow([timestamp.isoformat(), signal])
 
-# --------- Gist 状态管理 ---------
 def load_last_signal_from_gist():
     if not GIST_TOKEN:
         return {"position": "none"}
@@ -50,7 +48,6 @@ def save_last_signal(state):
 
 load_last_signal = load_last_signal_from_gist
 
-# --------- 时间工具 ---------
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -75,7 +72,6 @@ def is_market_open_now():
     market_close = sch.iloc[0]['market_close'].tz_convert(EST)
     return market_open <= now <= market_close
 
-# --------- 技术指标 ---------
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -90,7 +86,6 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-# --------- 数据拉取 ---------
 def get_data():
     sessions = get_market_sessions(get_est_now().date())
     start_dt = sessions[0][0] - timedelta(hours=6)
@@ -126,11 +121,10 @@ def get_data():
     df = compute_macd(df)
     df.ffill(inplace=True)
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
-    print("✅ 最新数据预览：")
+    print("最新数据预览：")
     print(df.tail(3)[["Close", "High", "Low", "Volume", "VWAP", "RSI", "MACD", "MACDh"]])
     return df
 
-# --------- 判断函数 ---------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
 
 def determine_strength(row, direction):
@@ -183,7 +177,6 @@ def allow_put_reentry(row, prev):
     return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and
             row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row))
 
-# --------- 收盘清仓 ---------
 def check_market_closed_and_clear():
     now = get_est_now()
     sch = nasdaq.schedule(start_date=now.date(), end_date=now.date())
@@ -195,11 +188,10 @@ def check_market_closed_and_clear():
         if state.get("position", "none") != "none":
             state["position"] = "none"
             save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⛔️ 收盘后自动清仓（状态归零）")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] CLOSE: 自动清仓")
         return True
     return False
 
-# --------- 信号判断 ---------
 def generate_signal(df):
     if len(df) < 6: return None, None
     row = df.iloc[-1]
@@ -216,8 +208,8 @@ def generate_signal(df):
             strength_put = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udd01 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）"
-        return time_index_est, f"\u26a0\ufe0f Call 出场信号（{strength}）"
+            return time_index_est, f"REVERSE TO PUT - exit call, enter put ({strength_put})"
+        return time_index_est, f"CALL EXIT ({strength})"
 
     elif current_pos == "put" and check_put_exit(row):
         strength = determine_strength(row, "put")
@@ -227,65 +219,63 @@ def generate_signal(df):
             strength_call = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udd01 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）"
-        return time_index_est, f"\u26a0\ufe0f Put 出场信号（{strength}）"
+            return time_index_est, f"REVERSE TO CALL - exit put, enter call ({strength_call})"
+        return time_index_est, f"PUT EXIT ({strength})"
 
     elif current_pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udcc8 主升浪 Call 入场（{strength}）"
+            return time_index_est, f"CALL ENTRY ({strength})"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udcc9 主跌浪 Put 入场（{strength}）"
+            return time_index_est, f"PUT ENTRY ({strength})"
         elif allow_bottom_rebound_call(row, prev_row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udcc8 底部反弹 Call 捕捉（{strength}）"
+            return time_index_est, f"CALL BOTTOM REBOUND ({strength})"
         elif allow_top_rebound_put(row, prev_row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udcc9 顶部反转 Put 捕捉（{strength}）"
+            return time_index_est, f"PUT TOP REVERSAL ({strength})"
         elif allow_call_reentry(row, prev_row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udcc8 趋势回补 Call 再入场（{strength}）"
+            return time_index_est, f"CALL RE-ENTRY ({strength})"
         elif allow_put_reentry(row, prev_row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index_est, f"\ud83d\udcc9 趋势回补 Put 再入场（{strength}）"
+            return time_index_est, f"PUT RE-ENTRY ({strength})"
 
     return None, None
 
-# --------- 通知 ---------
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
-        print("[通知] DISCORD_WEBHOOK_URL 未设置")
+        print("DISCORD_WEBHOOK_URL 未设置")
         return
     requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# --------- 主流程 ---------
 def main():
     try:
         now = get_est_now()
         print("=" * 60)
-        print(f"\ud83d\udd52 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"CURRENT TIME: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         state = load_last_signal()
-        print(f"\ud83d\udce6 当前仓位状态：{state.get('position', 'none')}")
+        print(f"CURRENT POSITION: {state.get('position', 'none')}")
         print("-" * 60)
 
         if check_market_closed_and_clear():
             return
 
         if not is_market_open_now():
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] \ud83d\udd57 盘前/盘后，不进行信号判断")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] MARKET CLOSED - SKIPPING")
             return
 
         df = get_data()
@@ -297,7 +287,7 @@ def main():
             send_to_discord(msg)
             log_signal_to_csv(time_signal, signal)
         else:
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] \u274e 无交易信号")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] NO SIGNAL")
 
     except Exception as e:
         print("[错误]", e)
