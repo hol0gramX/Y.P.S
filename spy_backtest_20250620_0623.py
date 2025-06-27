@@ -12,8 +12,8 @@ EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
 # ========= 回测日期 =========
-BACKTEST_START = "2024-06-20"
-BACKTEST_END = "2024-06-27"
+BACKTEST_START = pd.Timestamp("2025-06-20")
+BACKTEST_END = pd.Timestamp("2025-06-27")
 
 PREMARKET_START = time(4, 0)
 REGULAR_START = time(9, 30)
@@ -62,9 +62,10 @@ def fetch_data(start_date, end_date):
 
     df = df[~df.index.duplicated(keep="last")]
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
-    df["RSI"] = df.ta.rsi(length=14)
+    df.ta.rsi(length=14, append=True)  # 直接加进 df，会生成 RSI_14
     macd = df.ta.macd(fast=12, slow=26, signal=9)
     df = pd.concat([df, macd], axis=1)
+    df["RSI"] = df["RSI_14"]
     df["MACD"] = df["MACD_12_26_9"]
     df["MACDh"] = df["MACDh_12_26_9"]
     df["MACDs"] = df["MACDs_12_26_9"]
