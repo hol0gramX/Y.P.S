@@ -14,7 +14,7 @@ def fetch_data():
     end = datetime.now(tz=EST)
     start = end - timedelta(days=2)
     df = yf.download(SYMBOL, start=start, end=end, interval="1m")
-    df.columns = df.columns.get_level_values(0)  # 防止 MultiIndex
+    df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
     if not df.index.tz:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
@@ -23,7 +23,8 @@ def fetch_data():
     df = df[~df.index.duplicated(keep='last')]
     df.ta.rsi(length=14, append=True)
     macd = df.ta.macd(fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd], axis=1)
+    bbands = df.ta.bbands(length=20, std=2.0)
+    df = pd.concat([df, macd, bbands], axis=1)
     df["RSI"] = df["RSI_14"]
     df["MACD"] = df["MACD_12_26_9"]
     df["MACDh"] = df["MACDh_12_26_9"]
@@ -37,50 +38,77 @@ def calculate_rsi_slope(df, period=5):
     slope = (rsi - rsi.shift(period)) / period
     return slope
 
+# ========= 反转辅助判断 =========
+def allow_bottom_rebound_call(row, prev_row):
+    return (
+        prev_row["Close"] < prev_row["BBL_20_2.0"] and
+        row["Close"] > row["BBL_20_2.0"] and
+        row["RSI"] < 35 and
+        row["MACDh"] > -0.2 and
+        row["MACD"] > prev_row["MACD"]
+    )
+
+def allow_top_rebound_put(row, prev_row):
+    return (
+        prev_row["Close"] > prev_row["BBU_20_2.0"] and
+        row["Close"] < row["BBU_20_2.0"] and
+        row["RSI"] > 65 and
+        row["MACDh"] < 0.2 and
+        row["MACD"] < prev_row["MACD"]
+    )
+
 # ========= 信号生成 =========
 def generate_signals(df):
     signals = []
     in_position = None
-    last_signal_time = None
 
     for i in range(5, len(df)):
         row = df.iloc[i]
-        rsi = row["RSI"]
-        macd = row["MACD"]
-        macdh = row["MACDh"]
-        slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
+        prev = df.iloc[i - 1]
+        slope = calculate_rsi_slope(df.iloc[i - 5:i + 1]).iloc[-1]
         ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 强度评级
         strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
 
-        # === Call 入场 ===
+        # === Call 主升浪入场 ===
         if in_position != "CALL":
-            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
+            if row["RSI"] > 53 and slope > 0.15 and row["MACD"] > 0 and row["MACDh"] > 0:
                 signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
                 in_position = "CALL"
-                last_signal_time = ts
+                continue
 
-        # === Call 出场（加强过滤）===
-        elif in_position == "CALL":
-            if rsi < 50 and slope < 0:
-                if macd < 0:
-                    signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
-                    in_position = None
+        # === Call 出场 ===
+        if in_position == "CALL":
+            if row["RSI"] < 50 and slope < 0 and row["MACD"] < 0:
+                signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
+                in_position = None
+                continue
 
-        # === Put 入场 ===
+        # === Put 主跌浪入场 ===
         if in_position != "PUT":
-            if rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
+            if row["RSI"] < 47 and slope < -0.15 and row["MACD"] < 0 and row["MACDh"] < 0:
                 signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
                 in_position = "PUT"
-                last_signal_time = ts
+                continue
 
-        # === Put 出场（加强过滤）===
-        elif in_position == "PUT":
-            if rsi > 50 and slope > 0:
-                if macd > 0:
-                    signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
-                    in_position = None
+        # === Put 出场 ===
+        if in_position == "PUT":
+            if row["RSI"] > 50 and slope > 0 and row["MACD"] > 0:
+                signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
+                in_position = None
+                continue
+
+        # === 布林带底部反弹 Call ===
+        if in_position is None and allow_bottom_rebound_call(row, prev):
+            signals.append(f"[{ts}] 🌀 谷底布林带反弹 Call 入场（RSI={row['RSI']:.1f}）")
+            in_position = "CALL"
+            continue
+
+        # === 布林带顶部回落 Put ===
+        if in_position is None and allow_top_rebound_put(row, prev):
+            signals.append(f"[{ts}] 🔻 高位布林带反压 Put 入场（RSI={row['RSI']:.1f}）")
+            in_position = "PUT"
+            continue
 
     return signals
 
@@ -94,4 +122,3 @@ def backtest():
 
 if __name__ == "__main__":
     backtest()
-
