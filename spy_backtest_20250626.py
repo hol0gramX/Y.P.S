@@ -9,12 +9,12 @@ from zoneinfo import ZoneInfo
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 
-# ========= 数据函数 =========
+# ========= 数据获取 =========
 def fetch_data():
     end = datetime.now(tz=EST)
     start = end - timedelta(days=2)
     df = yf.download(SYMBOL, start=start, end=end, interval="1m")
-    df.columns = df.columns.get_level_values(0)  # 扁平化，防止 MultiIndex
+    df.columns = df.columns.get_level_values(0)  # 防止 MultiIndex
     df.index.name = "Datetime"
     if not df.index.tz:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
@@ -31,18 +31,17 @@ def fetch_data():
     df = df.dropna()
     return df
 
-# ========= 斜率函数 =========
+# ========= RSI 斜率 =========
 def calculate_rsi_slope(df, period=5):
     rsi = df["RSI"]
     slope = (rsi - rsi.shift(period)) / period
     return slope
 
-# ========= 信号函数 =========
+# ========= 信号生成 =========
 def generate_signals(df):
     signals = []
     in_position = None
-    last_signal_strength = None
-    last_entry_time = None
+    last_signal_time = None
 
     for i in range(5, len(df)):
         row = df.iloc[i]
@@ -52,47 +51,40 @@ def generate_signals(df):
         slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
         ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
-        strength = ""
-        if abs(slope) > 0.4:
-            strength = "强"
-        elif abs(slope) > 0.2:
-            strength = "中"
-        else:
-            strength = "弱"
+        # 强度评级
+        strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
 
-        # Call 入场条件
+        # === Call 入场 ===
         if in_position != "CALL":
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
-                if not (last_entry_time and (row.name - last_entry_time).seconds < 300 and last_signal_strength == strength):
-                    signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
-                    in_position = "CALL"
-                    last_signal_strength = strength
-                    last_entry_time = row.name
+                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
+                in_position = "CALL"
+                last_signal_time = ts
 
+        # === Call 出场（加强过滤）===
         elif in_position == "CALL":
-            if rsi < 50 or slope < 0:
-                signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
-                in_position = None
-                last_signal_strength = None
+            if rsi < 50 and slope < 0:
+                if macd < 0:
+                    signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
+                    in_position = None
 
-        # Put 入场条件
+        # === Put 入场 ===
         if in_position != "PUT":
             if rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
-                if not (last_entry_time and (row.name - last_entry_time).seconds < 300 and last_signal_strength == strength):
-                    signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
-                    in_position = "PUT"
-                    last_signal_strength = strength
-                    last_entry_time = row.name
+                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
+                in_position = "PUT"
+                last_signal_time = ts
 
+        # === Put 出场（加强过滤）===
         elif in_position == "PUT":
-            if rsi > 50 or slope > 0:
-                signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
-                in_position = None
-                last_signal_strength = None
+            if rsi > 50 and slope > 0:
+                if macd > 0:
+                    signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
+                    in_position = None
 
     return signals
 
-# ========= 回测函数 =========
+# ========= 回测入口 =========
 def backtest():
     print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
     df = fetch_data()
