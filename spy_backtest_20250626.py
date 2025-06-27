@@ -1,4 +1,3 @@
-# ========= 配置区域 =========
 import os
 import json
 import pandas as pd
@@ -8,6 +7,7 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
+# ========= 配置区域 =========
 STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
@@ -19,71 +19,94 @@ def get_est_now():
 
 def is_market_open(dt):
     schedule = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
-    if schedule.empty:
-        return False
-    market_open = schedule.iloc[0]['market_open'].tz_convert(EST)
-    market_close = schedule.iloc[0]['market_close'].tz_convert(EST)
-    return market_open <= dt <= market_close
+    return not schedule.empty
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
-    return {"position": "none", "last_signal_time": ""}
-
-def save_state(state):
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
-
-# ========= 主逻辑 =========
 def fetch_data():
     end = get_est_now()
     start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m")
-    df.dropna(inplace=True)
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m", auto_adjust=True)
+    df = df[['Close']].copy()
+    df.rename(columns={"Close": "close"}, inplace=True)
     df.ta.rsi(length=14, append=True)
-    macd = ta.macd(df['Close'])
-    df = pd.concat([df, macd], axis=1)
+    df.ta.macd(append=True)
+    df.ta.sma(length=5, append=True)
+    df.ta.sma(length=10, append=True)
+    df.ta.sma(length=20, append=True)
     return df
 
-def detect_signals(df):
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {"position": "flat"}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+def slope(series, period=3):
+    if len(series) < period:
+        return 0
+    y = series[-period:]
+    x = range(period)
+    slope = pd.Series(y).diff().mean()
+    return slope
+
+def generate_signals(df):
     signals = []
-    for i in range(35, len(df)):
-        ts = df.index[i]
-        rsi = df['RSI_14'].iloc[i]
-        rsi_slope = df['RSI_14'].iloc[i] - df['RSI_14'].iloc[i-3]
-        macd_hist = df['MACDh_12_26_9'].iloc[i]
-        macd_hist_prev = df['MACDh_12_26_9'].iloc[i-1]
+    state = {"position": "flat"}
+    for i in range(20, len(df)):
+        row = df.iloc[i]
+        prev_row = df.iloc[i - 1]
+        time_str = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
-        price = df['Close'].iloc[i]
-        volume = df['Volume'].iloc[i]
+        rsi = row['RSI_14']
+        macd = row['MACD_12_26_9']
+        signal = row['MACDs_12_26_9']
+        hist = row['MACDh_12_26_9']
+        rsi_slope = slope(df['RSI_14'].iloc[i-3:i+1], period=3)
 
-        # ========== 多头入场增强判断 ==========
-        if rsi > 60 and macd_hist > 0 and macd_hist > macd_hist_prev:
-            signals.append((ts, "📈 主升浪 Call 入场（增强RSI+MACD判断）"))
-        elif rsi > 50 and rsi_slope > 6 and macd_hist > 0:
-            signals.append((ts, "📈 主升浪 Call 启动信号（RSI拔地+MACD背书）"))
+        # 多头信号
+        if state['position'] == 'flat':
+            if rsi > 53 and rsi_slope > 2 and macd > signal and hist > 0:
+                signals.append(f"[{time_str}] 📈 主升浪 Call 入场")
+                state['position'] = 'call'
 
-        # ========== 空头入场增强判断 ==========
-        elif rsi < 40 and macd_hist < 0 and macd_hist < macd_hist_prev:
-            signals.append((ts, "📉 主跌浪 Put 入场（增强RSI+MACD判断）"))
-        elif rsi < 50 and rsi_slope < -6 and macd_hist < 0:
-            signals.append((ts, "📉 主跌浪 Put 启动信号（RSI坠崖+MACD背书）"))
+        elif state['position'] == 'call':
+            if rsi < 48 or macd < signal:
+                signals.append(f"[{time_str}] ⚠️ Call 出场信号")
+                state['position'] = 'flat'
+
+        elif state['position'] == 'put':
+            if rsi > 52 or macd > signal:
+                signals.append(f"[{time_str}] ⚠️ Put 出场信号")
+                state['position'] = 'flat'
+
+        # 空头信号
+        if state['position'] == 'flat':
+            if rsi < 47 and rsi_slope < -2 and macd < signal and hist < 0:
+                signals.append(f"[{time_str}] 📉 主跌浪 Put 入场")
+                state['position'] = 'put'
 
     return signals
 
 def backtest():
+    now = get_est_now()
+    if not is_market_open(now):
+        print("[🔒] 市场休市，跳过回测")
+        return
+
     df = fetch_data()
-    signals = detect_signals(df)
+    signals = generate_signals(df)
 
-    log_file = "signal_log_backtest.csv"
-    rows = []
-    for ts, signal in signals:
-        print(f"[{ts}] {signal}")
-        rows.append({"time": ts, "signal": signal})
-    pd.DataFrame(rows).to_csv(log_file, index=False)
-    print(f"[✅ 保存完成] 写入 {log_file} 共 {len(rows)} 条信号")
+    print(f"[🔁 回测开始] {now.isoformat()}")
+    for signal in signals:
+        print(signal)
 
-if __name__ == '__main__':
-    print(f"[🔁 回测开始] {get_est_now()}")
+    with open("signal_log_backtest.csv", "w") as f:
+        for signal in signals:
+            f.write(signal + "\n")
+    print(f"[✅ 保存完成] 写入 signal_log_backtest.csv 共 {len(signals)} 条信号")
+
+if __name__ == "__main__":
     backtest()
