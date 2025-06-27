@@ -1,3 +1,4 @@
+# ========= 配置区域 =========
 import os
 import json
 import pandas as pd
@@ -7,114 +8,95 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
-# ========= 配置区域 =========
 STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========= 工具函数 =========
+# ========= 辅助函数 =========
 def get_est_now():
     return datetime.now(tz=EST)
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {"position": "none", "last_entry_time": None}
+def is_market_open(dt):
+    sched = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
+    return not sched.empty and sched.iloc[0]['market_open'].tz_convert(EST) <= dt <= sched.iloc[0]['market_close'].tz_convert(EST)
 
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
+def is_market_day(dt):
+    return not nasdaq.schedule(start_date=dt.date(), end_date=dt.date()).empty
 
-def is_market_hours(ts):
-    dt = pd.Timestamp(ts).tz_localize(None)
+def is_regular_hours(dt):
     return time(9, 30) <= dt.time() <= time(16, 0)
 
-def in_forbidden_time(ts):
-    est = pd.Timestamp(ts).tz_localize("America/New_York")
-    t = est.time()
-    return (time(16, 0) <= t < time(20, 0)) or (time(4, 30) <= t < time(9, 30))
+def is_post_market(dt):
+    return time(16, 0) < dt.time() <= time(20, 0)
 
-def get_signal_strength(rsi, macd, volume, avg_volume):
-    score = 0
-    if rsi > 60: score += 1
-    if macd > 0: score += 1
-    if volume > avg_volume: score += 1
-    if score == 3: return "强"
-    if score == 2: return "中"
-    return "弱"
+def is_pre_market(dt):
+    return time(4, 30) <= dt.time() < time(9, 30)
 
-def reset_position_if_needed(df, state):
-    for i, row in df.iterrows():
-        ts = row.name
-        if ts.time() == time(16, 0):
-            state["position"] = "none"
-            state["last_entry_time"] = None
+def load_last_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, 'r') as f:
+            return json.load(f)
+    return {"position": "none"}
 
-def log_signal(ts, message):
-    print(f"[{ts}] {message}")
-    with open("signal_log_backtest.csv", "a") as f:
-        f.write(f"{ts},{message}\n")
+def save_last_state(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
 
+# ========= 主函数 =========
 def main():
-    end = datetime.now(tz=EST)
-    start = end - timedelta(days=2)
+    end = get_est_now()
+    start = end - timedelta(days=3)
     df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
-    df.columns = df.columns.get_level_values(0)  # 🔧 修复 MultiIndex 报错
-    df.dropna(inplace=True)
+    df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
+    df.columns = df.columns.str.capitalize()  # 标准化列名
+
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
-    df.ta.ema(length=20, append=True)
-    df["avg_volume"] = df["volume"].rolling(30).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
+    df["avg_volume"] = df["Volume"].rolling(30).mean()
 
-    state = load_state()
-    reset_position_if_needed(df, state)
+    last_state = {"position": "none", "last_entry_time": None}
+    signal_log = []
 
-    for i in range(30, len(df)):
+    for i in range(34, len(df)):
+        now = df.index[i].tz_convert(EST)
         row = df.iloc[i]
-        ts = row.name
 
-        if in_forbidden_time(ts):
+        # 强制清仓机制
+        if is_post_market(now) or is_pre_market(now):
+            last_state["position"] = "none"
             continue
 
-        rsi = row["RSI_14"]
-        macd = row["MACD_12_26_9"]
-        macdh = row["MACDh_12_26_9"]
-        volume = row["volume"]
-        avg_volume = row["avg_volume"]
-        close = row["close"]
+        # 非交易日跳过
+        if not is_market_day(now):
+            continue
 
-        signal_strength = get_signal_strength(rsi, macd, volume, avg_volume)
-        trend = "增强" if macdh > 0.1 else ("减弱" if macdh < -0.1 else "震荡")
+        rsi = row['RSI_14']
+        macd = row['MACD_12_26_9']
+        macdh = row['MACDh_12_26_9']
+        close = row['Close']
+        ma20 = row['MA20']
+        volume = row['Volume']
+        avg_volume = row['avg_volume']
 
-        if state["position"] == "none":
-            if macdh > 0.1 and rsi > 50:
-                log_signal(ts, f"📈 主升浪 Call 入场（{signal_strength}，趋势：{trend}）")
-                state["position"] = "call"
-                state["last_entry_time"] = str(ts)
-            elif macdh < -0.1 and rsi < 50:
-                log_signal(ts, f"📉 主跌浪 Put 入场（{signal_strength}，趋势：{trend}）")
-                state["position"] = "put"
-                state["last_entry_time"] = str(ts)
-        elif state["position"] == "call":
-            if rsi < 55 or macdh < 0:
-                log_signal(ts, f"⚠️ Call 出场信号（{signal_strength}）")
-                state["position"] = "none"
-                if macdh < -0.1 and rsi < 50:
-                    log_signal(ts, f"📉 主跌浪 Put 入场（{signal_strength}，趋势：{trend}）")
-                    state["position"] = "put"
-                    state["last_entry_time"] = str(ts)
-        elif state["position"] == "put":
-            if rsi > 45 or macdh > 0:
-                log_signal(ts, f"⚠️ Put 出场信号（{signal_strength}）")
-                state["position"] = "none"
-                if macdh > 0.1 and rsi > 50:
-                    log_signal(ts, f"📈 主升浪 Call 入场（{signal_strength}，趋势：{trend}）")
-                    state["position"] = "call"
-                    state["last_entry_time"] = str(ts)
+        # 简化的判断逻辑（待你融合完整策略）
+        if rsi < 30 and macd < 0 and macdh < 0 and close < ma20 and volume > avg_volume:
+            if last_state["position"] != "put":
+                last_state["position"] = "put"
+                signal_log.append([now.strftime("%Y-%m-%d %H:%M:%S"), "📉 主跌浪 Put 入场"])
+        elif rsi > 70 and macd > 0 and macdh > 0 and close > ma20 and volume > avg_volume:
+            if last_state["position"] != "call":
+                last_state["position"] = "call"
+                signal_log.append([now.strftime("%Y-%m-%d %H:%M:%S"), "📈 主升浪 Call 入场"])
+        elif (rsi > 60 and last_state["position"] == "put") or (rsi < 40 and last_state["position"] == "call"):
+            signal_log.append([now.strftime("%Y-%m-%d %H:%M:%S"), "⚠️ {} 出场信号".format(last_state["position"].capitalize())])
+            last_state["position"] = "none"
 
-    save_state(state)
+    save_last_state(last_state)
+    out_path = "signal_log_backtest.csv"
+    pd.DataFrame(signal_log, columns=["timestamp", "signal"]).to_csv(out_path, index=False)
+    print(f"[✅ 保存完成] 写入 {out_path} 共 {len(signal_log)} 条信号")
 
 if __name__ == "__main__":
     main()
