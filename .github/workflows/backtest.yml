@@ -25,7 +25,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-        run: python spy_backtest_20250626.py
+        run: python spy_backtest_LTD.py
 
       - name: Upload backtest result CSV
         uses: actions/upload-artifact@v4
