@@ -15,7 +15,7 @@ nasdaq = mcal.get_calendar("NASDAQ")
 
 # ========= 数据获取 =========
 def fetch_data(start_date, end_date):
-    df = yf.download(SYMBOL, start=start_date, end=end_date + timedelta(days=1), interval="1m", prepost=True, progress=False)
+    df = yf.download(SYMBOL, start=start_date, end=end_date + timedelta(days=1), interval="1m", prepost=True, progress=False, auto_adjust=False)
     df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
     if df.index.tz is None:
