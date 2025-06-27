@@ -40,10 +40,23 @@ def download_market_data(start, end):
     if df.empty:
         raise ValueError("下载数据为空")
     df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+
+    # 计算 MACD
     df = compute_macd(df)
-    df['RSI'] = ta.rsi(df['Close'], length=14).fillna(50)
+
+    # 计算 RSI（防止 None 报错）
+    rsi = ta.rsi(df['Close'], length=14)
+    if rsi is None or not isinstance(rsi, pd.Series):
+        print("[⚠️] RSI计算失败，使用默认值")
+        df['RSI'] = 50
+    else:
+        df['RSI'] = rsi.fillna(50)
+
+    # VWAP
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+
     return df
+
 
 def analyze_signals(signal_df, market_df):
     print("\n[📊 分析回测信号]")
