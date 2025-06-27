@@ -17,13 +17,19 @@ jobs:
         with:
           python-version: 3.11
 
-      - name: Install dependencies
+      - name: Install numpy first (to fix pandas_ta issue)
         run: |
-          pip install yfinance pandas pandas_ta
+          python -m pip install --upgrade pip
+          pip install numpy==1.23.5
+
+      - name: Install other dependencies
+        run: |
+          pip install yfinance pandas pandas_ta pandas_market_calendars requests
 
       - name: Run backtest
         run: python spy_backtest_20250626.py
 
       - name: Run analyzer
         run: python strategy_refinement_analyzer_backtest.py
+
 
