@@ -1,73 +1,74 @@
 import os
-import json
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# ========= 配置区域 =========
+# ========= 配置 =========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-STATE_FILE = "last_signal.json"
-OUTPUT_FILE = "signal_log_backtest.csv"
 
-# ========= 数据获取 =========
+# ========= 数据函数 =========
 def fetch_data():
-    start = (datetime.now(tz=EST) - timedelta(days=2)).strftime("%Y-%m-%d")
-    end = (datetime.now(tz=EST) + timedelta(days=1)).strftime("%Y-%m-%d")
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", auto_adjust=False)
-
-    # 转换时区
+    end = datetime.now(tz=EST)
+    start = end - timedelta(days=2)
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m")
+    df.index.name = "Datetime"
     if not df.index.tz:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
-
-    # 扁平化列名，防止 pandas-ta 错误
-    df.columns = [str(col) for col in df.columns]
-
-    # 添加技术指标
+    else:
+        df.index = df.index.tz_convert(EST)
+    df = df[~df.index.duplicated(keep='last')]
     df.ta.rsi(length=14, append=True)
-    df.ta.macd(append=True)
-    df["RSI_slope"] = df["RSI_14"].diff()
-
+    macd = df.ta.macd(fast=12, slow=26, signal=9)
+    df = pd.concat([df, macd], axis=1)
+    df["RSI"] = df["RSI_14"]
+    df["MACD"] = df["MACD_12_26_9"]
+    df["MACDh"] = df["MACDh_12_26_9"]
+    df["MACDs"] = df["MACDs_12_26_9"]
+    df = df.dropna()
     return df
 
-# ========= 信号判断主逻辑 =========
+# ========= 斜率函数 =========
+def calculate_rsi_slope(df, period=5):
+    rsi = df["RSI"]
+    slope = (rsi - rsi.shift(period)) / period
+    return slope
+
+# ========= 信号函数 =========
 def generate_signals(df):
     signals = []
-    position = None
+    in_position = None
+    last_signal_time = None
 
-    for i in range(1, len(df)):
+    for i in range(5, len(df)):
         row = df.iloc[i]
-        prev = df.iloc[i - 1]
-        timestamp = row.name.strftime("%Y-%m-%d %H:%M:%S")
+        rsi = row["RSI"]
+        macd = row["MACD"]
+        macdh = row["MACDh"]
+        slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
+        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
-        rsi = row["RSI_14"]
-        macd = row["MACD_12_26_9"]
-        macdh = row["MACDh_12_26_9"]
-        slope = row["RSI_slope"]
+        if in_position != "CALL":
+            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
+                signals.append(f"[{ts}] 📈 主升浪 Call 入场（趋势：增强）")
+                in_position = "CALL"
+                last_signal_time = ts
+        elif in_position == "CALL":
+            if rsi < 50 or slope < 0:
+                signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
+                in_position = None
 
-        # ---- 斜率突变逻辑 ----
-        slope_rising = slope > 0.5 and prev["RSI_slope"] <= 0.2
-
-        # ---- 入场逻辑 ----
-        if position is None:
-            if rsi > 53 and macd > 0 and macdh > 0 and slope_rising:
-                signals.append(f"[{timestamp}] 📈 主升浪 Call 入场（斜率突变，趋势确认）")
-                position = "CALL"
-            elif rsi < 40 and macd < 0 and macdh < 0:
-                signals.append(f"[{timestamp}] 📉 主跌浪 Put 入场（趋势确认）")
-                position = "PUT"
-
-        # ---- 出场逻辑 ----
-        elif position == "CALL":
-            if rsi < 50 or macdh < 0:
-                signals.append(f"[{timestamp}] ⚠️ Call 出场信号")
-                position = None
-        elif position == "PUT":
-            if rsi > 45 or macdh > 0:
-                signals.append(f"[{timestamp}] ⚠️ Put 出场信号")
-                position = None
+        if in_position != "PUT":
+            if rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
+                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（趋势：增强）")
+                in_position = "PUT"
+                last_signal_time = ts
+        elif in_position == "PUT":
+            if rsi > 50 or slope > 0:
+                signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
+                in_position = None
 
     return signals
 
@@ -76,14 +77,8 @@ def backtest():
     print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
     df = fetch_data()
     signals = generate_signals(df)
+    for sig in signals:
+        print(sig)
 
-    for s in signals:
-        print(s)
-
-    # 保存为 CSV
-    df_signals = pd.DataFrame(signals, columns=["signal"])
-    df_signals.to_csv(OUTPUT_FILE, index=False)
-    print(f"[✅ 保存完成] 写入 {OUTPUT_FILE} 共 {len(signals)} 条信号")
-
-# ========= 执行 =========
 if __name__ == "__main__":
+    backtest()
