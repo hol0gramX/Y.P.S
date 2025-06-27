@@ -1,12 +1,11 @@
-# .github/workflows/backtest_0620_0623.yml
-
 name: 回测 SPY 0620 和 0623
 
 on:
-  workflow_dispatch:  # 手动触发
-  push:               # 每次 push 自动触发
+  workflow_dispatch:
+  push:
     paths:
-      - 'spy_backtest_20250620_0623.py'
+      - 'scripts/spy_backtest_20250620_0623.py'
+      - '.github/workflows/backtest_0620_0623.yml'
 
 jobs:
   backtest:
@@ -21,4 +20,4 @@ jobs:
           pip install yfinance pandas pandas_ta
 
       - name: 执行回测脚本
-        run: python spy_backtest_20250620_0623.py
+        run: python scripts/spy_backtest_20250620_0623.py
