@@ -19,94 +19,56 @@ def get_est_now():
 
 def is_market_open(dt):
     schedule = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
-    return not schedule.empty
+    if schedule.empty:
+        return False
+    market_open = schedule.iloc[0]["market_open"].tz_convert(EST)
+    market_close = schedule.iloc[0]["market_close"].tz_convert(EST)
+    return market_open <= dt <= market_close
 
 def fetch_data():
     end = get_est_now()
     start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", auto_adjust=True)
-    df = df[['Close']].copy()
-    df.rename(columns={"Close": "close"}, inplace=True)
-    df.ta.rsi(length=14, append=True)
-    df.ta.macd(append=True)
-    df.ta.sma(length=5, append=True)
-    df.ta.sma(length=10, append=True)
-    df.ta.sma(length=20, append=True)
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m")
+    df.dropna(inplace=True)
+    df["RSI"] = ta.rsi(df["Close"], length=14)
+    macd = ta.macd(df["Close"])
+    df["MACD"] = macd["MACD_12_26_9"]
+    df["MACDh"] = macd["MACDh_12_26_9"]
+    df["MACDs"] = macd["MACDs_12_26_9"]
     return df
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {"position": "flat"}
-
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-def slope(series, period=3):
-    if len(series) < period:
-        return 0
-    y = series[-period:]
-    x = range(period)
-    slope = pd.Series(y).diff().mean()
-    return slope
-
+# ========= 信号生成逻辑 =========
 def generate_signals(df):
     signals = []
-    state = {"position": "flat"}
-    for i in range(20, len(df)):
+    for i in range(1, len(df)):
         row = df.iloc[i]
-        prev_row = df.iloc[i - 1]
-        time_str = row.name.strftime("%Y-%m-%d %H:%M:%S")
+        prev = df.iloc[i - 1]
+        time = row.name.to_pydatetime()
 
-        rsi = row['RSI_14']
-        macd = row['MACD_12_26_9']
-        signal = row['MACDs_12_26_9']
-        hist = row['MACDh_12_26_9']
-        rsi_slope = slope(df['RSI_14'].iloc[i-3:i+1], period=3)
+        rsi = row["RSI"]
+        macd = row["MACD"]
+        macdh = row["MACDh"]
+        close = row["Close"]
 
-        # 多头信号
-        if state['position'] == 'flat':
-            if rsi > 53 and rsi_slope > 2 and macd > signal and hist > 0:
-                signals.append(f"[{time_str}] 📈 主升浪 Call 入场")
-                state['position'] = 'call'
-
-        elif state['position'] == 'call':
-            if rsi < 48 or macd < signal:
-                signals.append(f"[{time_str}] ⚠️ Call 出场信号")
-                state['position'] = 'flat'
-
-        elif state['position'] == 'put':
-            if rsi > 52 or macd > signal:
-                signals.append(f"[{time_str}] ⚠️ Put 出场信号")
-                state['position'] = 'flat'
-
-        # 空头信号
-        if state['position'] == 'flat':
-            if rsi < 47 and rsi_slope < -2 and macd < signal and hist < 0:
-                signals.append(f"[{time_str}] 📉 主跌浪 Put 入场")
-                state['position'] = 'put'
+        # 示例逻辑：仅当 RSI > 53 且 MACDh 正增长时给出 Call 信号
+        if rsi is not None and macdh is not None and not pd.isna(rsi) and not pd.isna(macdh):
+            if rsi > 53 and macdh > prev["MACDh"]:
+                signals.append((time, "📈 主升浪 Call 入场（趋势：增强）"))
 
     return signals
 
+# ========= 回测主逻辑 =========
 def backtest():
-    now = get_est_now()
-    if not is_market_open(now):
-        print("[🔒] 市场休市，跳过回测")
-        return
-
+    print(f"[🔁 回测开始] {get_est_now().isoformat()}")
     df = fetch_data()
     signals = generate_signals(df)
 
-    print(f"[🔁 回测开始] {now.isoformat()}")
-    for signal in signals:
-        print(signal)
-
-    with open("signal_log_backtest.csv", "w") as f:
-        for signal in signals:
-            f.write(signal + "\n")
-    print(f"[✅ 保存完成] 写入 signal_log_backtest.csv 共 {len(signals)} 条信号")
+    log_file = "signal_log_backtest.csv"
+    with open(log_file, "w") as f:
+        f.write("timestamp,message\n")
+        for t, msg in signals:
+            f.write(f"{t},{msg}\n")
+    print(f"[✅ 保存完成] 写入 {log_file} 共 {len(signals)} 条信号")
 
 if __name__ == "__main__":
     backtest()
