@@ -61,6 +61,7 @@ def main():
     end = datetime.now(tz=EST)
     start = end - timedelta(days=2)
     df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
+    df.columns = df.columns.get_level_values(0)  # 🔧 修复 MultiIndex 报错
     df.dropna(inplace=True)
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
