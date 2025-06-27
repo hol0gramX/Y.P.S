@@ -14,7 +14,7 @@ def fetch_data():
     end = datetime.now(tz=EST)
     start = end - timedelta(days=2)
     df = yf.download(SYMBOL, start=start, end=end, interval="1m")
-    df.columns = df.columns.get_level_values(0)
+    df.columns = df.columns.get_level_values(0)  # 防止 MultiIndex
     df.index.name = "Datetime"
     if not df.index.tz:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
@@ -38,24 +38,25 @@ def calculate_rsi_slope(df, period=5):
     slope = (rsi - rsi.shift(period)) / period
     return slope
 
-# ========= 反转辅助判断 =========
-def allow_bottom_rebound_call(row, prev_row):
-    return (
-        prev_row["Close"] < prev_row["BBL_20_2.0"] and
-        row["Close"] > row["BBL_20_2.0"] and
-        row["RSI"] < 35 and
-        row["MACDh"] > -0.2 and
-        row["MACD"] > prev_row["MACD"]
-    )
-
-def allow_top_rebound_put(row, prev_row):
-    return (
-        prev_row["Close"] > prev_row["BBU_20_2.0"] and
-        row["Close"] < row["BBU_20_2.0"] and
-        row["RSI"] > 65 and
-        row["MACDh"] < 0.2 and
-        row["MACD"] < prev_row["MACD"]
-    )
+# ========= 允许布林带反弹逻辑 =========
+def allow_bollinger_rebound(row, prev_row, direction):
+    if direction == "CALL":
+        return (
+            prev_row["close"] < prev_row["BBL_20_2.0"] and
+            row["close"] > prev_row["close"] and
+            row["MACD"] > 0 and
+            row["MACDh"] > 0 and
+            row["RSI"] > 48
+        )
+    elif direction == "PUT":
+        return (
+            prev_row["close"] > prev_row["BBU_20_2.0"] and
+            row["close"] < prev_row["close"] and
+            row["MACD"] < 0 and
+            row["MACDh"] < 0 and
+            row["RSI"] < 52
+        )
+    return False
 
 # ========= 信号生成 =========
 def generate_signals(df):
@@ -64,51 +65,35 @@ def generate_signals(df):
 
     for i in range(5, len(df)):
         row = df.iloc[i]
-        prev = df.iloc[i - 1]
-        slope = calculate_rsi_slope(df.iloc[i - 5:i + 1]).iloc[-1]
+        prev_row = df.iloc[i-1]
+        rsi = row["RSI"]
+        macd = row["MACD"]
+        macdh = row["MACDh"]
+        slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
         ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
-
         strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
 
-        # === Call 主升浪入场 ===
-        if in_position != "CALL":
-            if row["RSI"] > 53 and slope > 0.15 and row["MACD"] > 0 and row["MACDh"] > 0:
-                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
-                in_position = "CALL"
-                continue
-
-        # === Call 出场 ===
+        # === 出场判断 ===
         if in_position == "CALL":
-            if row["RSI"] < 50 and slope < 0 and row["MACD"] < 0:
+            if rsi < 50 and slope < 0 and macd < 0:
                 signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
                 in_position = None
-                continue
 
-        # === Put 主跌浪入场 ===
-        if in_position != "PUT":
-            if row["RSI"] < 47 and slope < -0.15 and row["MACD"] < 0 and row["MACDh"] < 0:
-                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
-                in_position = "PUT"
-                continue
-
-        # === Put 出场 ===
-        if in_position == "PUT":
-            if row["RSI"] > 50 and slope > 0 and row["MACD"] > 0:
+        elif in_position == "PUT":
+            if rsi > 50 and slope > 0 and macd > 0:
                 signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
                 in_position = None
-                continue
 
-        # === 布林带底部反弹 Call ===
-        if in_position is None and allow_bottom_rebound_call(row, prev):
-            signals.append(f"[{ts}] 🌀 谷底布林带反弹 Call 入场（RSI={row['RSI']:.1f}）")
-            in_position = "CALL"
-            continue
+        # === 入场判断 ===
+        if in_position != "CALL":
+            if (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or allow_bollinger_rebound(row, prev_row, "CALL"):
+                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
+                in_position = "CALL"
 
-        # === 布林带顶部回落 Put ===
-        if in_position is None and allow_top_rebound_put(row, prev):
-            signals.append(f"[{ts}] 🔻 高位布林带反压 Put 入场（RSI={row['RSI']:.1f}）")
-            in_position = "PUT"
-            continue
+        if in_position != "PUT":
+            if (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or allow_bollinger_rebound(row, prev_row, "PUT"):
+                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
+                in_position = "PUT"
 
     return signals
 
