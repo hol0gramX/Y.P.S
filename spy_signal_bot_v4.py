@@ -104,15 +104,37 @@ def get_5min_trend():
 # --------- 数据拉取 ---------
 def get_data():
     sessions = get_market_sessions(get_est_now().date())
-    start_dt = sessions[0][0] - timedelta(hours=5, minutes=30)
-    end_dt = sessions[-1][1] + timedelta(hours=4)
-    df = yf.download(SYMBOL, interval="1m", start=start_dt.tz_convert('UTC'), end=end_dt.tz_convert('UTC'), progress=False, prepost=True, auto_adjust=True)
-    if df.empty: raise ValueError("数据为空")
 
-    df = df.dropna(subset=['High','Low','Close','Volume'])
-    df = df[df['Volume'] > 0]
-    df.index = df.index.tz_localize('UTC').tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+    # 更稳妥的时间窗口，确保包含 pre/post 和完整盘中
+    start_dt = sessions[0][0] - timedelta(hours=6)
+    end_dt = sessions[-1][1] + timedelta(hours=6)
 
+    # 拉取 1min 数据，包含盘前盘后
+    df = yf.download(
+        SYMBOL,
+        interval="1m",
+        start=start_dt.tz_convert("UTC"),
+        end=end_dt.tz_convert("UTC"),
+        progress=False,
+        prepost=True,
+        auto_adjust=True
+    )
+
+    if df.empty:
+        raise ValueError("数据为空")
+
+    # 兼容 MultiIndex（防止列名不是 'Close' 而是 ('Close', '')）
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # 丢弃缺失基础字段的数据
+    df = df.dropna(subset=["High", "Low", "Close", "Volume"])
+    df = df[df["Volume"] > 0]
+
+    # 时间标准化
+    df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+
+    # 构造筛选掩码，确保保留盘前+盘中+盘后
     mask = pd.Series(False, index=df.index)
     for op, cl, early in sessions:
         intervals = [(op - timedelta(hours=5, minutes=30), op), (op, cl)]
@@ -122,13 +144,24 @@ def get_data():
             mask |= (df.index >= s) & (df.index < e)
 
     df = df[mask]
+
+    # 指标计算
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
+
+    # 前向填充 + 仅保留关键列完整的数据
     df.ffill(inplace=True)
-    return df.dropna()
+    df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
+
+    # 打印调试信息
+    print("✅ 最新数据预览：")
+    print(df.tail(3)[["Close", "High", "Low", "Volume", "VWAP", "RSI", "MACD", "MACDh"]])
+
+    return df
+
 
 # --------- 判断函数 ---------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
