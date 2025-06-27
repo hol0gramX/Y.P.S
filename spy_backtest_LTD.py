@@ -5,79 +5,96 @@ import yfinance as yf
 import pandas_ta as ta
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_market_calendars as mcal
 
 # ========= 配置区域 =========
+STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-START_DATE = "2025-06-25"
-END_DATE = "2025-06-28"
+nasdaq = mcal.get_calendar("NASDAQ")
 
 # ========= 工具函数 =========
 def get_est_now():
     return datetime.now(tz=EST)
 
-def is_market_open(ts):
-    est_time = ts.astimezone(EST)
-    t = est_time.time()
-    return time(9, 30) <= t <= time(16, 0)
+def est_timestamp(ts):
+    return ts.tz_convert(EST).replace(tzinfo=None)
 
-def is_post_or_premarket(ts):
-    est_time = ts.astimezone(EST)
-    t = est_time.time()
-    return (time(16, 0) <= t <= time(20, 0)) or (time(4, 30) <= t <= time(9, 30))
+def is_market_open(dt):
+    schedule = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
+    if schedule.empty:
+        return False
+    market_open = schedule.iloc[0]['market_open'].tz_convert(EST).time()
+    market_close = schedule.iloc[0]['market_close'].tz_convert(EST).time()
+    return market_open <= dt.time() <= market_close
 
-# ========= 主逻辑 =========
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return {"position": "none"}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+# ========= 主函数 =========
 def main():
-    start = pd.Timestamp(START_DATE).tz_localize(EST)
-    end = pd.Timestamp(END_DATE).tz_localize(EST)
-    
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
+    now = get_est_now()
+    start = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # 修复 MultiIndex 列名问题
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0].lower() for col in df.columns]
-    else:
-        df.columns = df.columns.map(str.lower)
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
+    df.index = df.index.tz_localize("UTC").tz_convert(EST)
 
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
     df.ta.sma(length=20, append=True)
 
-    df = df.dropna().copy()
-    df["position"] = ""
+    state = load_state()
+    position = state.get("position", "none")
 
-    last_signal = None
-    position = None
+    last_date = None
 
-    for i in range(1, len(df)):
-        row = df.iloc[i]
-        ts = row.name.tz_localize(None).replace(tzinfo=EST)
-
-        # 自动清仓机制（每天下午 16:00 之后立即清仓）
-        if ts.time() >= time(16, 0) and position:
-            print(f"[{ts}] ⚠️ {position} 出场信号（强）")
-            position = None
+    for timestamp, row in df.iterrows():
+        ts = timestamp
+        if ts.time() >= time(16, 0):
+            position = "none"
+            continue
+        if time(4, 0) <= ts.time() < time(9, 30):
             continue
 
-        # 在盘后和盘前只采集指标，不进行入场判断
-        if is_post_or_premarket(ts):
+        if last_date != ts.date():
+            position = "none"
+            last_date = ts.date()
+
+        rsi = row.get("RSI_14")
+        macdh = row.get("MACDh_12_26_9")
+        close = row.get("Close")
+        ma20 = row.get("SMA_20")
+
+        if rsi is None or macdh is None or close is None or ma20 is None:
             continue
 
-        if position is None:
-            if row["rsi_14"] < 30 and row["macdh_12_26_9"] > 0 and row["close"] > row["sma_20"]:
+        if position == "none":
+            if rsi < 30 and macdh > 0 and close > ma20:
                 print(f"[{ts}] 📈 主升浪 Call 入场（强）")
-                position = "Call"
-            elif row["rsi_14"] > 70 and row["macdh_12_26_9"] < 0 and row["close"] < row["sma_20"]:
+                position = "call"
+            elif rsi > 70 and macdh < 0 and close < ma20:
                 print(f"[{ts}] 📉 主跌浪 Put 入场（强）")
-                position = "Put"
-        elif position == "Call":
-            if row["rsi_14"] > 65 or row["macdh_12_26_9"] < 0:
+                position = "put"
+
+        elif position == "call":
+            if rsi > 70 or macdh < 0:
                 print(f"[{ts}] ⚠️ Call 出场信号（强）")
-                position = None
-        elif position == "Put":
-            if row["rsi_14"] < 35 or row["macdh_12_26_9"] > 0:
+                position = "none"
+
+        elif position == "put":
+            if rsi < 30 or macdh > 0:
                 print(f"[{ts}] ⚠️ Put 出场信号（强）")
-                position = None
+                position = "none"
+
+    save_state({"position": position})
 
 if __name__ == "__main__":
     main()
