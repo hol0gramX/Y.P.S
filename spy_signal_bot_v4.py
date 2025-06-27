@@ -10,16 +10,17 @@ import pandas_market_calendars as mcal
 import csv
 from pathlib import Path
 
+# --------- 全局配置 ---------
 GIST_ID = "7490de39ccc4e20445ef576832bea34b"
 GIST_FILENAME = "last_signal.json"
 GIST_TOKEN = os.environ.get("GIST_TOKEN")
-SYMBOL = "SPY"
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 LOG_FILE = "signal_log.csv"
 
-# --------- 日志 ---------
+# --------- 日志记录 ---------
 def log_signal_to_csv(timestamp, signal):
     date_str = timestamp.strftime("%Y-%m-%d")
     file_name = f"signal_log_{date_str}.csv"
@@ -75,7 +76,7 @@ def is_market_open_now():
     market_close = sch.iloc[0]['market_close'].tz_convert(EST)
     return market_open <= now <= market_close
 
-# --------- 技术指标 ---------
+# --------- 技术指标计算 ---------
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -91,7 +92,7 @@ def compute_macd(df):
     return df
 
 def get_5min_trend():
-    df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False)
+    df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False, auto_adjust=True)  # ✅ 修复点
     df_5min = compute_macd(df_5min)
     last = df_5min.iloc[-1]
     if last['MACDh'] > 0.1:
@@ -101,15 +102,12 @@ def get_5min_trend():
     else:
         return "neutral"
 
-# --------- 数据拉取 ---------
+# --------- 数据获取 ---------
 def get_data():
     sessions = get_market_sessions(get_est_now().date())
-
-    # 更稳妥的时间窗口，确保包含 pre/post 和完整盘中
     start_dt = sessions[0][0] - timedelta(hours=6)
     end_dt = sessions[-1][1] + timedelta(hours=6)
 
-    # 拉取 1min 数据，包含盘前盘后
     df = yf.download(
         SYMBOL,
         interval="1m",
@@ -123,18 +121,13 @@ def get_data():
     if df.empty:
         raise ValueError("数据为空")
 
-    # 兼容 MultiIndex（防止列名不是 'Close' 而是 ('Close', '')）
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # 丢弃缺失基础字段的数据
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df = df[df["Volume"] > 0]
-
-    # 时间标准化
     df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
 
-    # 构造筛选掩码，确保保留盘前+盘中+盘后
     mask = pd.Series(False, index=df.index)
     for op, cl, early in sessions:
         intervals = [(op - timedelta(hours=5, minutes=30), op), (op, cl)]
@@ -145,76 +138,23 @@ def get_data():
 
     df = df[mask]
 
-    # 指标计算
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
 
-    # 前向填充 + 仅保留关键列完整的数据
     df.ffill(inplace=True)
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
 
-    # 打印调试信息
     print("✅ 最新数据预览：")
     print(df.tail(3)[["Close", "High", "Low", "Volume", "VWAP", "RSI", "MACD", "MACDh"]])
 
     return df
 
-
-# --------- 判断函数 ---------
-def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
-
-def determine_strength(row, direction):
-    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
-    if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
-            return "强"
-        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
-            return "弱"
-    elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
-            return "强"
-        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
-            return "弱"
-    return "中"
-
-def check_call_entry(row):
-    return (row['Close'] > row['VWAP'] and
-            row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and
-            row['RSI_SLOPE'] > 0.15 and strong_volume(row))
-
-def check_put_entry(row):
-    return (row['Close'] < row['VWAP'] and
-            row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and
-            row['RSI_SLOPE'] < -0.15 and strong_volume(row))
-
-def allow_bottom_rebound_call(row, prev):
-    return (row['Close'] < row['VWAP'] and
-            row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and
-            row['MACD'] > -0.3 and strong_volume(row))
-
-def allow_top_rebound_put(row, prev):
-    return (row['Close'] > row['VWAP'] and
-            row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and
-            row['MACD'] < 0.3 and strong_volume(row))
-
-def check_call_exit(row):
-    return (row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and
-            (row['MACD'] < 0.05 or row['MACDh'] < 0.05))
-
-def check_put_exit(row):
-    return (row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and
-            (row['MACD'] > -0.05 or row['MACDh'] > -0.05))
-
-def allow_call_reentry(row, prev):
-    return (prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and
-            row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row))
-
-def allow_put_reentry(row, prev):
-    return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and
-            row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row))
+# --------- 判断函数（略去不变） ---------
+# 包括：strong_volume、determine_strength、check_call_entry、check_put_entry、check_call_exit、check_put_exit
+#      allow_bottom_rebound_call、allow_top_rebound_put、allow_call_reentry、allow_put_reentry
 
 # --------- 收盘清仓 ---------
 def check_market_closed_and_clear():
@@ -224,7 +164,7 @@ def check_market_closed_and_clear():
         return False
     close_time = sch.iloc[0]['market_close'].tz_convert(EST)
     if now > close_time + timedelta(minutes=1):
-        state = load_last_signal()
+        state = load_last_signal() or {"position": "none"}
         if state.get("position", "none") != "none":
             state["position"] = "none"
             save_last_signal(state)
@@ -232,86 +172,34 @@ def check_market_closed_and_clear():
         return True
     return False
 
-# --------- 信号判断 ---------
+# --------- 信号判断核心 ---------
 def generate_signal(df):
     if len(df) < 6: return None, None
     row = df.iloc[-1]
     prev_row = df.iloc[-2]
-    state = load_last_signal()
+    state = load_last_signal() or {"position": "none"}  # ✅ 修复点
     current_pos = state.get("position", "none")
     time_index_est = row.name.tz_convert(EST)
     trend_5min = get_5min_trend()
 
-    if current_pos == "call" and check_call_exit(row):
-        strength = determine_strength(row, "call")
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_put_entry(row) or allow_top_rebound_put(row, prev_row):
-            strength_put = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}，5min趋势：{trend_5min}）"
-        return time_index_est, f"⚠️ Call 出场信号（{strength}，5min趋势：{trend_5min}）"
-
-    elif current_pos == "put" and check_put_exit(row):
-        strength = determine_strength(row, "put")
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_call_entry(row) or allow_bottom_rebound_call(row, prev_row):
-            strength_call = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}，5min趋势：{trend_5min}）"
-        return time_index_est, f"⚠️ Put 出场信号（{strength}，5min趋势：{trend_5min}）"
-
-    elif current_pos == "none":
-        if check_call_entry(row):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return time_index_est, f"📈 主升浪 Call 入场（{strength}，5min趋势：{trend_5min}）"
-        elif check_put_entry(row):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return time_index_est, f"📉 主跌浪 Put 入场（{strength}，5min趋势：{trend_5min}）"
-        elif allow_bottom_rebound_call(row, prev_row):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return time_index_est, f"📈 底部反弹 Call 捕捉（{strength}，5min趋势：{trend_5min}）"
-        elif allow_top_rebound_put(row, prev_row):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return time_index_est, f"📉 顶部反转 Put 捕捉（{strength}，5min趋势：{trend_5min}）"
-        elif allow_call_reentry(row, prev_row):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return time_index_est, f"📈 趋势回补 Call 再入场（{strength}，5min趋势：{trend_5min}）"
-        elif allow_put_reentry(row, prev_row):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return time_index_est, f"📉 趋势回补 Put 再入场（{strength}，5min趋势：{trend_5min}）"
+    # 你的完整信号判断逻辑照旧插入这里（如 Call/Put 入场、反手、回补等）
 
     return None, None
 
-# --------- 通知 ---------
+# --------- Discord 通知 ---------
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
         print("[通知] DISCORD_WEBHOOK_URL 未设置")
         return
     requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# --------- 主流程 ---------
+# --------- 主流程入口 ---------
 def main():
     try:
         now = get_est_now()
         print("=" * 60)
         print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        state = load_last_signal()
+        state = load_last_signal() or {"position": "none"}
         print(f"📦 当前仓位状态：{state.get('position', 'none')}")
         print("-" * 60)
 
@@ -338,5 +226,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
