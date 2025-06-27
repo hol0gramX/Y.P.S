@@ -20,5 +20,5 @@ jobs:
           pip install yfinance pandas pandas_ta
 
       - name: 执行回测脚本
-        run: python scripts/spy_backtest_20250620_0623.py
+        run: python spy_backtest_20250620_0623.py
 
