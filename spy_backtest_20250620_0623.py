@@ -21,32 +21,55 @@ REGULAR_END = time(16, 0)
 
 # ========= 数据获取 =========
 def fetch_data(start_date, end_date):
-    trade_days = nasdaq.valid_days(start_date=start_date, end_date=end_date)
-    if len(trade_days) == 0:
-        raise ValueError("无有效交易日")
+    sessions = nasdaq.schedule(start_date=start_date, end_date=end_date)
+    if sessions.empty:
+        raise ValueError("选定日期范围内无有效交易日")
 
-    start = pd.Timestamp(trade_days[0]).tz_localize(EST) - timedelta(hours=6)
-    end = pd.Timestamp(trade_days[-1]).tz_localize(EST) + timedelta(hours=6)
+    # 获取首尾交易时间并转换为 EST 时区
+    session_start = sessions.iloc[0]["market_open"]
+    session_end = sessions.iloc[-1]["market_close"]
 
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True, progress=False)
-    df.columns = df.columns.get_level_values(0)
+    if session_start.tz is None:
+        session_start = session_start.tz_localize("UTC").tz_convert(EST)
+    else:
+        session_start = session_start.tz_convert(EST)
+
+    if session_end.tz is None:
+        session_end = session_end.tz_localize("UTC").tz_convert(EST)
+    else:
+        session_end = session_end.tz_convert(EST)
+
+    start = session_start - timedelta(hours=6)
+    end = session_end + timedelta(hours=6)
+
+    df = yf.download(
+        SYMBOL,
+        start=start.tz_convert("UTC"),
+        end=end.tz_convert("UTC"),
+        interval="1m",
+        prepost=True,
+        progress=False,
+    )
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
-    if not df.index.tz:
+
+    if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
-    df = df[~df.index.duplicated(keep='last')]
 
-    df.ta.rsi(length=14, append=True)
+    df = df[~df.index.duplicated(keep="last")]
+    df = df.dropna(subset=["High", "Low", "Close", "Volume"])
+    df["RSI"] = df.ta.rsi(length=14)
     macd = df.ta.macd(fast=12, slow=26, signal=9)
     df = pd.concat([df, macd], axis=1)
-
-    df["RSI"] = df["RSI_14"]
     df["MACD"] = df["MACD_12_26_9"]
     df["MACDh"] = df["MACDh_12_26_9"]
     df["MACDs"] = df["MACDs_12_26_9"]
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
+    df["Vol_MA5"] = df["Volume"].rolling(5).mean()
     df["RSI_SLOPE"] = df["RSI"].diff(3)
     df = df.dropna()
     return df
