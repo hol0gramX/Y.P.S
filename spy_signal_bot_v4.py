@@ -157,6 +157,16 @@ def check_put_entry(row):
             row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and
             row['RSI_SLOPE'] < -0.15 and strong_volume(row))
 
+def allow_bottom_rebound_call(row, prev):
+    return (row['Close'] < row['VWAP'] and
+            row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and
+            row['MACD'] > -0.3 and strong_volume(row))
+
+def allow_top_rebound_put(row, prev):
+    return (row['Close'] > row['VWAP'] and
+            row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and
+            row['MACD'] < 0.3 and strong_volume(row))
+
 def check_call_exit(row):
     return (row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and
             (row['MACD'] < 0.05 or row['MACDh'] < 0.05))
@@ -203,7 +213,7 @@ def generate_signal(df):
         strength = determine_strength(row, "call")
         state["position"] = "none"
         save_last_signal(state)
-        if check_put_entry(row):
+        if check_put_entry(row) or allow_top_rebound_put(row, prev_row):
             strength_put = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
@@ -214,7 +224,7 @@ def generate_signal(df):
         strength = determine_strength(row, "put")
         state["position"] = "none"
         save_last_signal(state)
-        if check_call_entry(row):
+        if check_call_entry(row) or allow_bottom_rebound_call(row, prev_row):
             strength_call = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
@@ -232,6 +242,16 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return time_index_est, f"📉 主跌浪 Put 入场（{strength}，5min趋势：{trend_5min}）"
+        elif allow_bottom_rebound_call(row, prev_row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return time_index_est, f"📈 底部反弹 Call 捕捉（{strength}，5min趋势：{trend_5min}）"
+        elif allow_top_rebound_put(row, prev_row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return time_index_est, f"📉 顶部反转 Put 捕捉（{strength}，5min趋势：{trend_5min}）"
         elif allow_call_reentry(row, prev_row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
