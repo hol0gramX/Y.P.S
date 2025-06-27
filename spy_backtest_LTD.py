@@ -1,4 +1,3 @@
-# 完整升级后的回测脚本：逻辑与主策略保持一致
 import os
 import pandas as pd
 import yfinance as yf
@@ -10,34 +9,30 @@ import pandas_market_calendars as mcal
 # ========= 配置 =========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-PREMARKET_START = time(4, 0)
 REGULAR_START = time(9, 30)
 REGULAR_END = time(16, 0)
 nasdaq = mcal.get_calendar("NASDAQ")
 
 # ========= 数据获取 =========
-def fetch_data():
-    end = datetime.now(tz=EST)
-    start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True, auto_adjust=True)
-    df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
+def fetch_data(start_date, end_date):
+    df = yf.download(SYMBOL, start=start_date, end=end_date + timedelta(days=1), interval="1m", prepost=True, progress=False)
+    df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
-    if not df.index.tz:
+    if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
     df = df[~df.index.duplicated(keep='last')]
-
     df.ta.rsi(length=14, append=True)
     macd = df.ta.macd(fast=12, slow=26, signal=9)
-    bbands = df.ta.bbands(length=20, std=2.0)
+    bbands = df.ta.bbands(length=20)
     df = pd.concat([df, macd, bbands], axis=1)
-
     df["RSI"] = df["RSI_14"]
     df["MACD"] = df["MACD_12_26_9"]
     df["MACDh"] = df["MACDh_12_26_9"]
     df["MACDs"] = df["MACDs_12_26_9"]
-    df["VWAP"] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df["BBU"] = df["BBU_20_2.0"]
+    df["BBL"] = df["BBL_20_2.0"]
     df = df.dropna()
     return df
 
@@ -51,121 +46,123 @@ def is_market_day(ts):
     cal = nasdaq.schedule(start_date=ts.date(), end_date=ts.date())
     return not cal.empty
 
-def determine_strength(row, direction):
-    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
-    if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
-            return "强"
-        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
-            return "弱"
-    elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
-            return "强"
-        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
-            return "弱"
-    return "中"
+def allow_bottom_rebound_call(row, prev):
+    return (
+        row['Close'] < row['BBL'] and
+        row['RSI'] > prev['RSI'] and
+        row['MACDh'] > prev['MACDh'] and
+        row['MACD'] > -0.3
+    )
+
+def allow_top_rebound_put(row, prev):
+    return (
+        row['Close'] > row['BBU'] and
+        row['RSI'] < prev['RSI'] and
+        row['MACDh'] < prev['MACDh'] and
+        row['MACD'] < 0.3
+    )
 
 def allow_bollinger_rebound(row, prev_row, direction):
     if direction == "CALL":
         return (
-            prev_row["Close"] < prev_row["BBL_20_2.0"] and
-            row["Close"] > row["BBL_20_2.0"] and
+            prev_row["Close"] < prev_row["BBL"] and
+            row["Close"] > row["BBL"] and
             row["RSI"] > 48 and row["MACD"] > 0
         )
     elif direction == "PUT":
         return (
-            prev_row["Close"] > prev_row["BBU_20_2.0"] and
-            row["Close"] < row["BBU_20_2.0"] and
+            prev_row["Close"] > prev_row["BBU"] and
+            row["Close"] < row["BBU"] and
             row["RSI"] < 52 and row["MACD"] < 0
         )
     return False
 
-def allow_bottom_rebound_call(row, prev):
-    return (row['Close'] < row['VWAP'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3)
-
-def allow_top_rebound_put(row, prev):
-    return (row['Close'] > row['VWAP'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3)
-
-def allow_call_reentry(row, prev):
-    return (prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1)
-
-def allow_put_reentry(row, prev):
-    return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05)
-
 # ========= 信号生成 =========
 def generate_signals(df):
     signals = []
+    last_signal_time = None
     in_position = None
 
     for i in range(5, len(df)):
         row = df.iloc[i]
-        prev_row = df.iloc[i - 1]
-        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
-        current_time = row.name.time()
+        prev = df.iloc[i - 1]
+        ts = row.name
+        date = ts.date()
+        tstr = ts.strftime("%Y-%m-%d %H:%M:%S")
+        current_time = ts.time()
 
-        if not is_market_day(row.name):
-            continue
+        if not is_market_day(ts):
+            continue  # 跳过非交易日
 
-        if current_time < PREMARKET_START:
-            continue
-
-        if current_time < REGULAR_START and df.iloc[i - 1].name.date() != row.name.date():
+        # 盘后强制空仓
+        if current_time >= REGULAR_END and in_position is not None:
+            signals.append(f"[{tstr}] 🛑 市场收盘，清空仓位")
             in_position = None
+            continue
+
+        # 盘前/盘后不处理信号
+        if current_time < REGULAR_START or current_time >= REGULAR_END:
+            continue
+
+        # 避免重复发信号
+        if last_signal_time == row.name:
+            continue
 
         rsi = row["RSI"]
         macd = row["MACD"]
         macdh = row["MACDh"]
         slope = calculate_rsi_slope(df.iloc[i - 5:i + 1]).iloc[-1]
+        strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
 
-        strength_call = determine_strength(row, "call")
-        strength_put = determine_strength(row, "put")
-
+        # 出场逻辑 + 结构反手
         if in_position == "CALL" and rsi < 50 and slope < 0 and macd < 0:
-            signals.append(f"[{ts}] ⚠️ Call 出场信号（{strength_call}）")
+            signals.append(f"[{tstr}] ⚠️ Call 出场信号（趋势：转弱）")
             in_position = None
-            if (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or allow_top_rebound_put(row, prev_row):
-                signals.append(f"[{ts}] 📉 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）")
+            last_signal_time = row.name
+            if (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or allow_top_rebound_put(row, prev):
+                signals.append(f"[{tstr}] 📉 反手 Put：Call 结构破坏 + Put 入场（{strength}）")
                 in_position = "PUT"
+                last_signal_time = row.name
             continue
 
-        if in_position == "PUT" and rsi > 50 and slope > 0 and macd > 0:
-            signals.append(f"[{ts}] ⚠️ Put 出场信号（{strength_put}）")
+        elif in_position == "PUT" and rsi > 50 and slope > 0 and macd > 0:
+            signals.append(f"[{tstr}] ⚠️ Put 出场信号（趋势：转弱）")
             in_position = None
-            if (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or allow_bottom_rebound_call(row, prev_row):
-                signals.append(f"[{ts}] 📈 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）")
+            last_signal_time = row.name
+            if (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or allow_bottom_rebound_call(row, prev):
+                signals.append(f"[{tstr}] 📈 反手 Call：Put 结构破坏 + Call 入场（{strength}）")
                 in_position = "CALL"
+                last_signal_time = row.name
             continue
 
-        if in_position != "CALL":
-            allow_call = (
-                (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or
-                allow_bollinger_rebound(row, prev_row, "CALL") or
-                allow_bottom_rebound_call(row, prev_row) or
-                allow_call_reentry(row, prev_row)
-            )
-            if allow_call:
-                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength_call}）")
+        # 入场判断（趋势 + 反弹）
+        if in_position is None:
+            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
+                signals.append(f"[{tstr}] 📈 主升浪 Call 入场（{strength}）")
                 in_position = "CALL"
-                continue
-
-        if in_position != "PUT":
-            allow_put = (
-                (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or
-                allow_bollinger_rebound(row, prev_row, "PUT") or
-                allow_top_rebound_put(row, prev_row) or
-                allow_put_reentry(row, prev_row)
-            )
-            if allow_put:
-                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength_put}）")
+                last_signal_time = row.name
+            elif rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
+                signals.append(f"[{tstr}] 📉 主跌浪 Put 入场（{strength}）")
                 in_position = "PUT"
-                continue
+                last_signal_time = row.name
+            elif allow_bottom_rebound_call(row, prev) or allow_bollinger_rebound(row, prev, "CALL"):
+                signals.append(f"[{tstr}] 📉 底部反弹 Call 捕捉（评分：4/5）")
+                in_position = "CALL"
+                last_signal_time = row.name
+            elif allow_top_rebound_put(row, prev) or allow_bollinger_rebound(row, prev, "PUT"):
+                signals.append(f"[{tstr}] 📈 顶部反转 Put 捕捉（评分：3/5）")
+                in_position = "PUT"
+                last_signal_time = row.name
 
     return signals
 
 # ========= 回测入口 =========
 def backtest():
-    print(f"[🔁 回溯开始] {datetime.now(tz=EST)}")
-    df = fetch_data()
+    today = datetime.now(tz=EST).date()
+    start = today - timedelta(days=2)
+    end = today
+    print(f"[🔁 回测开始] {start} ~ {end}")
+    df = fetch_data(start, end)
     signals = generate_signals(df)
     for sig in signals:
         print(sig)
