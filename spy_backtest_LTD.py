@@ -1,4 +1,3 @@
-# ========= 配置区域 =========
 import os
 import json
 import pandas as pd
@@ -8,95 +7,83 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
+# ========= 配置 =========
 STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========= 辅助函数 =========
+# ========= 工具 =========
 def get_est_now():
     return datetime.now(tz=EST)
 
-def is_market_open(dt):
-    sched = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
-    return not sched.empty and sched.iloc[0]['market_open'].tz_convert(EST) <= dt <= sched.iloc[0]['market_close'].tz_convert(EST)
-
-def is_market_day(dt):
-    return not nasdaq.schedule(start_date=dt.date(), end_date=dt.date()).empty
-
-def is_regular_hours(dt):
-    return time(9, 30) <= dt.time() <= time(16, 0)
-
-def is_post_market(dt):
-    return time(16, 0) < dt.time() <= time(20, 0)
-
-def is_pre_market(dt):
-    return time(4, 30) <= dt.time() < time(9, 30)
-
 def load_last_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
+        with open(STATE_FILE, "r") as f:
             return json.load(f)
     return {"position": "none"}
 
 def save_last_state(state):
-    with open(STATE_FILE, 'w') as f:
+    with open(STATE_FILE, "w") as f:
         json.dump(state, f)
 
-# ========= 主函数 =========
+# ========= 主逻辑 =========
 def main():
-    end = get_est_now()
-    start = end - timedelta(days=3)
+    today = get_est_now().date()
+    start = datetime.combine(today - timedelta(days=2), time(4, 0), tzinfo=EST)
+    end = datetime.combine(today + timedelta(days=1), time(20, 0), tzinfo=EST)
+
     df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
-    df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
-    df.columns = df.columns.str.capitalize()  # 标准化列名
+    df.index = df.index.tz_localize(None).tz_localize(EST)
+    df = df.rename(columns=lambda x: x.lower())
 
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
-    df["MA20"] = df["Close"].rolling(20).mean()
-    df["avg_volume"] = df["Volume"].rolling(30).mean()
+    df["ma20"] = df["close"].rolling(20).mean()
+    df["avg_volume"] = df["volume"].rolling(30).mean()
 
-    last_state = {"position": "none", "last_entry_time": None}
-    signal_log = []
+    last_state = {"position": "none"}
 
     for i in range(34, len(df)):
-        now = df.index[i].tz_convert(EST)
+        now = df.index[i]
         row = df.iloc[i]
 
-        # 强制清仓机制
-        if is_post_market(now) or is_pre_market(now):
+        # === 非监控时间（下午16:00后至第二日04:30前）立即清仓 ===
+        if (time(16, 0) <= now.time() <= time(23, 59)) or (time(0, 0) <= now.time() < time(4, 30)):
+            if last_state["position"] != "none":
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 🔒 监控时间清仓 -> {last_state['position']} 站立退场")
+                last_state["position"] = "none"
+            continue
+
+        # === 开盘前清仓 ===
+        if now.time() == time(4, 0):
             last_state["position"] = "none"
-            continue
 
-        # 非交易日跳过
-        if not is_market_day(now):
-            continue
+        # === 例如：RSI < 30 + MACD 重合进场 Call ===
+        signal = None
+        if last_state["position"] == "none":
+            if row["RSI_14"] < 30 and row["MACDh_12_26_9"] > 0 and row["close"] > row["ma20"]:
+                signal = "call"
+            elif row["RSI_14"] > 70 and row["MACDh_12_26_9"] < 0 and row["close"] < row["ma20"]:
+                signal = "put"
+        elif last_state["position"] == "call":
+            if row["RSI_14"] > 65 or row["MACDh_12_26_9"] < 0:
+                signal = "exit_call"
+        elif last_state["position"] == "put":
+            if row["RSI_14"] < 35 or row["MACDh_12_26_9"] > 0:
+                signal = "exit_put"
 
-        rsi = row['RSI_14']
-        macd = row['MACD_12_26_9']
-        macdh = row['MACDh_12_26_9']
-        close = row['Close']
-        ma20 = row['MA20']
-        volume = row['Volume']
-        avg_volume = row['avg_volume']
-
-        # 简化的判断逻辑（待你融合完整策略）
-        if rsi < 30 and macd < 0 and macdh < 0 and close < ma20 and volume > avg_volume:
-            if last_state["position"] != "put":
-                last_state["position"] = "put"
-                signal_log.append([now.strftime("%Y-%m-%d %H:%M:%S"), "📉 主跌浪 Put 入场"])
-        elif rsi > 70 and macd > 0 and macdh > 0 and close > ma20 and volume > avg_volume:
-            if last_state["position"] != "call":
+        # === 打印日志 ===
+        if signal:
+            if signal == "call":
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 📈 Call 进场")
                 last_state["position"] = "call"
-                signal_log.append([now.strftime("%Y-%m-%d %H:%M:%S"), "📈 主升浪 Call 入场"])
-        elif (rsi > 60 and last_state["position"] == "put") or (rsi < 40 and last_state["position"] == "call"):
-            signal_log.append([now.strftime("%Y-%m-%d %H:%M:%S"), "⚠️ {} 出场信号".format(last_state["position"].capitalize())])
-            last_state["position"] = "none"
-
-    save_last_state(last_state)
-    out_path = "signal_log_backtest.csv"
-    pd.DataFrame(signal_log, columns=["timestamp", "signal"]).to_csv(out_path, index=False)
-    print(f"[✅ 保存完成] 写入 {out_path} 共 {len(signal_log)} 条信号")
+            elif signal == "put":
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] 📉 Put 进场")
+                last_state["position"] = "put"
+            elif signal.startswith("exit"):
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ {last_state['position'].capitalize()} 出场")
+                last_state["position"] = "none"
 
 if __name__ == "__main__":
     main()
