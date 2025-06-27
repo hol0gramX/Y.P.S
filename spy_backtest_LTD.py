@@ -45,7 +45,7 @@ def main():
     end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
     df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
-    df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    df.index = df.index.tz_convert(EST)
 
     df.ta.rsi(length=14, append=True)
     df.ta.macd(append=True)
