@@ -57,64 +57,64 @@ def allow_bollinger_rebound(row, prev_row, direction):
     return False
 
 # ========= 信号生成 =========
+def determine_strength(rsi, slope, macdh):
+    if rsi > 65 and macdh > 0.5 and slope > 0.25:
+        return "强"
+    elif rsi < 55 or slope < 0.1:
+        return "弱"
+    return "中"
+
 def generate_signals(df):
     signals = []
     in_position = None
-    last_signal_type = None
-    last_signal_time = None
+    last_date = None
 
     for i in range(5, len(df)):
         row = df.iloc[i]
         prev_row = df.iloc[i - 1]
+        ts = row.name
+        ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 每天开盘自动空仓归零
+        if last_date != ts.date():
+            in_position = None
+            last_date = ts.date()
+
         rsi = row["RSI"]
         macd = row["MACD"]
         macdh = row["MACDh"]
         slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
-        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
+        strength = determine_strength(rsi, slope, macdh)
 
-        strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
-
-        # === Call 入场 ===
         if in_position != "CALL":
             allow_call = (
                 (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or
                 allow_bollinger_rebound(row, prev_row, "CALL")
             )
             if allow_call:
-                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
+                signals.append(f"[{ts_str}] 📈 主升浪 Call 入场（{strength}）")
                 in_position = "CALL"
-                last_signal_type = "CALL"
-                last_signal_time = row.name
-                continue  # 防止同一分钟反手
+                continue
 
-        # === Call 出场 ===
         if in_position == "CALL":
             if rsi < 50 and slope < 0 and macd < 0:
-                signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
+                signals.append(f"[{ts_str}] ⚠️ Call 出场信号（{strength}）")
                 in_position = None
-                last_signal_type = "EXIT"
-                last_signal_time = row.name
 
-        # === Put 入场 ===
         if in_position != "PUT":
             allow_put = (
                 (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or
                 allow_bollinger_rebound(row, prev_row, "PUT")
             )
             if allow_put:
-                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
+                signals.append(f"[{ts_str}] 📉 主跌浪 Put 入场（{strength}）")
                 in_position = "PUT"
-                last_signal_type = "PUT"
-                last_signal_time = row.name
                 continue
 
-        # === Put 出场 ===
         if in_position == "PUT":
             if rsi > 50 and slope > 0 and macd > 0:
-                signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
+                signals.append(f"[{ts_str}] ⚠️ Put 出场信号（{strength}）")
                 in_position = None
-                last_signal_type = "EXIT"
-                last_signal_time = row.name
 
     return signals
 
@@ -128,4 +128,3 @@ def backtest():
 
 if __name__ == "__main__":
     backtest()
-
