@@ -6,155 +6,163 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
-# ========== 主配置 ==========
+# ========= 配置 =========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
+REGULAR_START = time(9, 30)
+REGULAR_END = time(16, 0)
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========== 主策略指标函数（全保留） ==========
-def compute_rsi(s, length=14):
-    delta = s.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    rs = up.rolling(length).mean() / down.rolling(length).mean()
-    return (100 - 100 / (1 + rs)).fillna(50)
-
-def compute_macd(df):
-    macd = ta.macd(df['Close'])
-    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+# ========= 数据获取 =========
+def fetch_data(start_date, end_date):
+    df = yf.download(SYMBOL, start=start_date, end=end_date + timedelta(days=1),
+                     interval="1m", prepost=True, progress=False, auto_adjust=False)
+    df.columns = df.columns.get_level_values(0)
+    df.index.name = "Datetime"
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
+    df = df[~df.index.duplicated(keep='last')]
+    df.ta.rsi(length=14, append=True)
+    macd = df.ta.macd(fast=12, slow=26, signal=9)
+    bbands = df.ta.bbands(length=20)
+    df = pd.concat([df, macd, bbands], axis=1)
+    df["RSI"] = df["RSI_14"]
+    df["MACD"] = df["MACD_12_26_9"]
+    df["MACDh"] = df["MACDh_12_26_9"]
+    df["MACDs"] = df["MACDs_12_26_9"]
+    df["BBU"] = df["BBU_20_2.0"]
+    df["BBL"] = df["BBL_20_2.0"]
+    df = df.dropna()
     return df
 
-def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
+# ========= 工具函数 =========
+def calculate_rsi_slope(df, period=5):
+    rsi = df["RSI"]
+    slope = (rsi - rsi.shift(period)) / period
+    return slope
 
-def determine_strength(row, direction):
-    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
-    if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
-            return "强"
-        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
-            return "弱"
-    elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
-            return "强"
-        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
-            return "弱"
-    return "中"
-
-def check_call_entry(row):
-    return (row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15 and strong_volume(row))
-
-def check_put_entry(row):
-    return (row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15 and strong_volume(row))
+def is_market_day(ts):
+    cal = nasdaq.schedule(start_date=ts.date(), end_date=ts.date())
+    return not cal.empty
 
 def allow_bottom_rebound_call(row, prev):
-    return (row['Close'] > row['VWAP'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3 and strong_volume(row))
-
-def allow_top_rebound_put(row, prev):
-    return (row['Close'] < row['VWAP'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3 and strong_volume(row))
-
-def check_call_exit(row):
-    return (row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05))
-
-def check_put_exit(row):
-    return (row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05))
-
-def allow_call_reentry(row, prev):
-    return (prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row))
-
-def allow_put_reentry(row, prev):
-    return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row))
-
-# ========== 主策略信号判断函数 ==========
-def generate_signal(df_slice, current_pos):
-    if len(df_slice) < 2:
-        return None, None, current_pos
-
-    row = df_slice.iloc[-1]
-    prev_row = df_slice.iloc[-2]
-    ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
-
-    if current_pos == "call" and check_call_exit(row):
-        strength = determine_strength(row, "call")
-        if check_put_entry(row) or allow_top_rebound_put(row, prev_row):
-            strength_put = determine_strength(row, "put")
-            return ts, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）", "put"
-        return ts, f"⚠️ Call 出场信号（{strength}）", None
-
-    elif current_pos == "put" and check_put_exit(row):
-        strength = determine_strength(row, "put")
-        if check_call_entry(row) or allow_bottom_rebound_call(row, prev_row):
-            strength_call = determine_strength(row, "call")
-            return ts, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）", "call"
-        return ts, f"⚠️ Put 出场信号（{strength}）", None
-
-    elif current_pos is None:
-        if check_call_entry(row):
-            strength = determine_strength(row, "call")
-            return ts, f"📈 主升浪 Call 入场（{strength}）", "call"
-        elif check_put_entry(row):
-            strength = determine_strength(row, "put")
-            return ts, f"📉 主跌浪 Put 入场（{strength}）", "put"
-        elif allow_bottom_rebound_call(row, prev_row):
-            strength = determine_strength(row, "call")
-            return ts, f"🟢 底部反弹 Call 捕捉（{strength}）", "call"
-        elif allow_top_rebound_put(row, prev_row):
-            strength = determine_strength(row, "put")
-            return ts, f"🔴 顶部反转 Put 捕捉（{strength}）", "put"
-        elif allow_call_reentry(row, prev_row):
-            strength = determine_strength(row, "call")
-            return ts, f"📈 趋势回补 Call 再入场（{strength}）", "call"
-        elif allow_put_reentry(row, prev_row):
-            strength = determine_strength(row, "put")
-            return ts, f"📉 趋势回补 Put 再入场（{strength}）", "put"
-
-    return None, None, current_pos
-
-# ========== 回测入口 ==========
-def backtest_main(start_date="2025-06-20", end_date="2025-06-27"):
-    print(f"[🔁 回测区间] {start_date} → {end_date}")
-    all_sessions = nasdaq.schedule(start_date=start_date, end_date=end_date)
-    if all_sessions.empty:
-        print("❌ 无有效交易日")
-        return
-
-    start = all_sessions.iloc[0]["market_open"].tz_convert(EST) - timedelta(hours=6)
-    end = all_sessions.iloc[-1]["market_close"].tz_convert(EST) + timedelta(hours=6)
-
-    df = yf.download(
-        SYMBOL,
-        start=start.tz_convert("UTC"),
-        end=end.tz_convert("UTC"),
-        interval="1m",
-        prepost=True,
-        progress=False,
-        auto_adjust=True
+    return (
+        row['Close'] < row['BBL'] and
+        row['RSI'] > prev['RSI'] and
+        row['MACDh'] > prev['MACDh'] and
+        row['MACD'] > -0.3
     )
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+def allow_top_rebound_put(row, prev):
+    return (
+        row['Close'] > row['BBU'] and
+        row['RSI'] < prev['RSI'] and
+        row['MACDh'] < prev['MACDh'] and
+        row['MACD'] < 0.3
+    )
 
-    df = df.dropna(subset=["High", "Low", "Close", "Volume"])
-    df = df[df["Volume"] > 0]
-    df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+def allow_bollinger_rebound(row, prev_row, direction):
+    if direction == "CALL":
+        return (
+            prev_row["Close"] < prev_row["BBL"] and
+            row["Close"] > row["BBL"] and
+            row["RSI"] > 48 and row["MACD"] > 0
+        )
+    elif direction == "PUT":
+        return (
+            prev_row["Close"] > prev_row["BBU"] and
+            row["Close"] < row["BBU"] and
+            row["RSI"] < 52 and row["MACD"] < 0
+        )
+    return False
 
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'])
-    df['RSI_SLOPE'] = df['RSI'].diff(3)
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
-    df.ffill(inplace=True)
-    df.dropna(inplace=True)
+# ========= 信号生成 =========
+def generate_signals(df):
+    signals = []
+    last_signal_time = None
+    in_position = None
 
-    current_pos = None
-    for i in range(6, len(df)):
-        df_slice = df.iloc[i-2:i+1]
-        ts, signal, new_pos = generate_signal(df_slice, current_pos)
-        if signal:
-            print(f"[{ts}] {signal}")
-            current_pos = new_pos
+    for i in range(5, len(df)):
+        row = df.iloc[i]
+        prev = df.iloc[i - 1]
+        ts = row.name
+        tstr = ts.strftime("%Y-%m-%d %H:%M:%S")
+        current_time = ts.time()
 
-# ========== 调用 ==========
+        if not is_market_day(ts):
+            continue
+
+        if current_time >= REGULAR_END and in_position is not None:
+            signals.append(f"[{tstr}] 🛑 市场收盘，清空仓位")
+            in_position = None
+            continue
+
+        if current_time < REGULAR_START or current_time >= REGULAR_END:
+            continue
+
+        if last_signal_time == row.name:
+            continue
+
+        rsi = row["RSI"]
+        macd = row["MACD"]
+        macdh = row["MACDh"]
+        slope = calculate_rsi_slope(df.iloc[i - 5:i + 1]).iloc[-1]
+        strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
+
+        # 出场 + 反手
+        if in_position == "CALL" and rsi < 50 and slope < 0 and macd < 0:
+            signals.append(f"[{tstr}] ⚠️ Call 出场信号（趋势：转弱）")
+            in_position = None
+            last_signal_time = row.name
+            if (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or allow_top_rebound_put(row, prev):
+                signals.append(f"[{tstr}] 📉 反手 Put：Call 结构破坏 + Put 入场（{strength}）")
+                in_position = "PUT"
+                last_signal_time = row.name
+            continue
+
+        elif in_position == "PUT" and rsi > 50 and slope > 0 and macd > 0:
+            signals.append(f"[{tstr}] ⚠️ Put 出场信号（趋势：转弱）")
+            in_position = None
+            last_signal_time = row.name
+            if (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or allow_bottom_rebound_call(row, prev):
+                signals.append(f"[{tstr}] 📈 反手 Call：Put 结构破坏 + Call 入场（{strength}）")
+                in_position = "CALL"
+                last_signal_time = row.name
+            continue
+
+        # 入场
+        if in_position is None:
+            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
+                signals.append(f"[{tstr}] 📈 主升浪 Call 入场（{strength}）")
+                in_position = "CALL"
+                last_signal_time = row.name
+            elif rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
+                signals.append(f"[{tstr}] 📉 主跌浪 Put 入场（{strength}）")
+                in_position = "PUT"
+                last_signal_time = row.name
+            elif allow_bottom_rebound_call(row, prev) or allow_bollinger_rebound(row, prev, "CALL"):
+                signals.append(f"[{tstr}] 📉 底部反弹 Call 捕捉（评分：4/5）")
+                in_position = "CALL"
+                last_signal_time = row.name
+            elif allow_top_rebound_put(row, prev) or allow_bollinger_rebound(row, prev, "PUT"):
+                signals.append(f"[{tstr}] 📈 顶部反转 Put 捕捉（评分：3/5）")
+                in_position = "PUT"
+                last_signal_time = row.name
+
+    return signals
+
+# ========= 回测入口 =========
+def backtest(start_date_str="2025-06-20", end_date_str="2025-06-27"):
+    start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    print(f"[🔁 回测开始] {start_date} ~ {end_date}")
+    df = fetch_data(start_date, end_date)
+    signals = generate_signals(df)
+    for sig in signals:
+        print(sig)
+
+# ========= 执行 =========
 if __name__ == "__main__":
-    backtest_main("2025-06-20", "2025-06-27")
+    backtest("2025-06-20", "2025-06-27")
