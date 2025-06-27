@@ -121,6 +121,6 @@ def backtest(start_date, end_date):
         print(sig)
 
 if __name__ == "__main__":
-    start = datetime(2025, 6, 20, tzinfo=EST)
-    end = datetime(2025, 6, 24, tzinfo=EST)
+    start = datetime(2025, 6, 25, tzinfo=EST)
+    end = datetime(2025, 6, 27, tzinfo=EST)
     backtest(start, end)
