@@ -30,7 +30,6 @@ def log_signal_to_csv(timestamp, signal):
             writer.writerow(["timestamp", "signal"])
         writer.writerow([timestamp.isoformat(), signal])
 
-
 # --------- Gist 状态管理 ---------
 def load_last_signal_from_gist():
     if not GIST_TOKEN:
@@ -132,13 +131,19 @@ def get_data():
 
 # --------- 判断函数 ---------
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
+
 def determine_strength(row, direction):
+    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
     if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5: return "强"
-        elif row['RSI'] < 55: return "弱"
+        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
+            return "强"
+        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
+            return "弱"
     elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5: return "强"
-        elif row['RSI'] > 45: return "弱"
+        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
+            return "强"
+        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
+            return "弱"
     return "中"
 
 def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 50 and row['MACDh'] > -0.1 and strong_volume(row)
@@ -160,7 +165,7 @@ def check_market_closed_and_clear():
         if state.get("position", "none") != "none":
             state["position"] = "none"
             save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🛑 收盘后自动清仓（状态归零）")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⛔️ 收盘后自动清仓（状态归零）")
         return True
     return False
 
@@ -175,24 +180,26 @@ def generate_signal(df):
     trend_5min = get_5min_trend()
 
     if current_pos == "call" and check_call_exit(row):
+        strength = determine_strength(row, "call")
         state["position"] = "none"
         save_last_signal(state)
         if check_put_entry(row):
-            strength = determine_strength(row, "put")
+            strength_put = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}，5min趋势：{trend_5min}）"
-        return time_index_est, f"⚠️ Call 出场信号（5min趋势：{trend_5min}）"
+            return time_index_est, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}，5min趋势：{trend_5min}）"
+        return time_index_est, f"⚠️ Call 出场信号（{strength}，5min趋势：{trend_5min}）"
 
     elif current_pos == "put" and check_put_exit(row):
+        strength = determine_strength(row, "put")
         state["position"] = "none"
         save_last_signal(state)
         if check_call_entry(row):
-            strength = determine_strength(row, "call")
+            strength_call = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}，5min趋势：{trend_5min}）"
-        return time_index_est, f"⚠️ Put 出场信号（5min趋势：{trend_5min}）"
+            return time_index_est, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}，5min趋势：{trend_5min}）"
+        return time_index_est, f"⚠️ Put 出场信号（{strength}，5min趋势：{trend_5min}）"
 
     elif current_pos == "none":
         if check_call_entry(row):
@@ -258,5 +265,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
