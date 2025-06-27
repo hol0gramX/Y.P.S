@@ -6,75 +6,28 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
-# ========= 配置 =========
+# ========== 主配置 ==========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========= 回测日期 =========
-BACKTEST_START = pd.Timestamp("2025-06-20")
-BACKTEST_END = pd.Timestamp("2025-06-27")
+# ========== 主策略指标函数（全保留） ==========
+def compute_rsi(s, length=14):
+    delta = s.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    rs = up.rolling(length).mean() / down.rolling(length).mean()
+    return (100 - 100 / (1 + rs)).fillna(50)
 
-PREMARKET_START = time(4, 0)
-REGULAR_START = time(9, 30)
-REGULAR_END = time(16, 0)
-
-# ========= 数据获取 =========
-def fetch_data(start_date, end_date):
-    sessions = nasdaq.schedule(start_date=start_date, end_date=end_date)
-    if sessions.empty:
-        raise ValueError("选定日期范围内无有效交易日")
-
-    session_start = sessions.iloc[0]["market_open"]
-    session_end = sessions.iloc[-1]["market_close"]
-
-    if session_start.tz is None:
-        session_start = session_start.tz_localize("UTC").tz_convert(EST)
-    else:
-        session_start = session_start.tz_convert(EST)
-
-    if session_end.tz is None:
-        session_end = session_end.tz_localize("UTC").tz_convert(EST)
-    else:
-        session_end = session_end.tz_convert(EST)
-
-    start = session_start - timedelta(hours=6)
-    end = session_end + timedelta(hours=6)
-
-    df = yf.download(
-        SYMBOL,
-        start=start.tz_convert("UTC"),
-        end=end.tz_convert("UTC"),
-        interval="1m",
-        prepost=True,
-        progress=False,
-    )
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.index.name = "Datetime"
-
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC").tz_convert(EST)
-    else:
-        df.index = df.index.tz_convert(EST)
-
-    df = df[~df.index.duplicated(keep="last")]
-    df = df.dropna(subset=["High", "Low", "Close", "Volume"])
-    df.ta.rsi(length=14, append=True)
-    macd = df.ta.macd(fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd], axis=1)
-    df["RSI"] = df["RSI_14"]
-    df["MACD"] = df["MACD_12_26_9"]
-    df["MACDh"] = df["MACDh_12_26_9"]
-    df["MACDs"] = df["MACDs_12_26_9"]
-    df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
-    df["Vol_MA5"] = df["Volume"].rolling(5).mean()
-    df["RSI_SLOPE"] = df["RSI"].diff(3)
-    df = df.dropna()
+def compute_macd(df):
+    macd = ta.macd(df['Close'])
+    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
+    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
+    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-# ========= 信号强度判断 =========
+def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
+
 def determine_strength(row, direction):
     vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
     if direction == "call":
@@ -89,101 +42,119 @@ def determine_strength(row, direction):
             return "弱"
     return "中"
 
-# ========= 信号生成 =========
-def generate_signals(df):
-    signals = []
-    in_position = None
+def check_call_entry(row):
+    return (row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15 and strong_volume(row))
 
-    for i in range(5, len(df)):
-        row = df.iloc[i]
-        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
-        now_time = row.name.time()
+def check_put_entry(row):
+    return (row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15 and strong_volume(row))
 
-        if now_time < PREMARKET_START:
-            continue
-        if not (REGULAR_START <= now_time <= REGULAR_END):
-            continue
-        if now_time == REGULAR_START:
-            in_position = None
+def allow_bottom_rebound_call(row, prev):
+    return (row['Close'] > row['VWAP'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3 and strong_volume(row))
 
-        rsi = row["RSI"]
-        slope = row["RSI_SLOPE"]
-        macd = row["MACD"]
-        macdh = row["MACDh"]
-        vol_ok = row['Volume'] >= row['Vol_MA5']
-        direction = "call" if in_position != "PUT" else "put"
-        strength = determine_strength(row, direction)
+def allow_top_rebound_put(row, prev):
+    return (row['Close'] < row['VWAP'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3 and strong_volume(row))
 
-        # === 出场 + 反手逻辑 ===
-        if in_position == "CALL":
-            if rsi < 50 and slope < 0 and (macd < 0.05 or macdh < 0.05):
-                signals.append(f"[{ts}] ⚠️ Call 出场信号（{strength}）")
-                in_position = None
-                if row['Close'] < row['VWAP'] and rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and vol_ok:
-                    strength_put = determine_strength(row, "put")
-                    signals.append(f"[{ts}] 🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）")
-                    in_position = "PUT"
-                continue
+def check_call_exit(row):
+    return (row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05))
 
-        if in_position == "PUT":
-            if rsi > 50 and slope > 0 and (macd > -0.05 or macdh > -0.05):
-                signals.append(f"[{ts}] ⚠️ Put 出场信号（{strength}）")
-                in_position = None
-                if row['Close'] > row['VWAP'] and rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and vol_ok:
-                    strength_call = determine_strength(row, "call")
-                    signals.append(f"[{ts}] 🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）")
-                    in_position = "CALL"
-                continue
+def check_put_exit(row):
+    return (row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05))
 
-        # === 主趋势入场 ===
-        if in_position != "CALL":
-            if row['Close'] > row['VWAP'] and rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and vol_ok:
-                signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}）")
-                in_position = "CALL"
-                continue
+def allow_call_reentry(row, prev):
+    return (prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row))
 
-        if in_position != "PUT":
-            if row['Close'] < row['VWAP'] and rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and vol_ok:
-                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}）")
-                in_position = "PUT"
-                continue
+def allow_put_reentry(row, prev):
+    return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row))
 
-        # === 趋势回补 ===
-        if in_position is None:
-            if row['Close'] > row['VWAP'] and rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and vol_ok:
-                signals.append(f"[{ts}] 📈 趋势回补 Call 再入场（{strength}）")
-                in_position = "CALL"
-                continue
-            if row['Close'] < row['VWAP'] and rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and vol_ok:
-                signals.append(f"[{ts}] 📉 趋势回补 Put 再入场（{strength}）")
-                in_position = "PUT"
-                continue
+# ========== 主策略信号判断函数 ==========
+def generate_signal(df_slice, current_pos):
+    if len(df_slice) < 2:
+        return None, None, current_pos
 
-        # === 新增：底部反弹 Call ===
-        if in_position is None:
-            if row['Close'] > row['VWAP'] and rsi < 30 and slope > 0.2 and macd > 0 and macdh > 0:
-                strength = determine_strength(row, "call")
-                signals.append(f"[{ts}] 🟢 底部反弹 Call 入场（{strength}）")
-                in_position = "CALL"
-                continue
+    row = df_slice.iloc[-1]
+    prev_row = df_slice.iloc[-2]
+    ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
-        # === 新增：顶部反转 Put ===
-        if in_position is None:
-            if row['Close'] < row['VWAP'] and rsi > 70 and slope < -0.2 and macd < 0 and macdh < 0:
-                strength = determine_strength(row, "put")
-                signals.append(f"[{ts}] 🔴 顶部反转 Put 入场（{strength}）")
-                in_position = "PUT"
-                continue
+    if current_pos == "call" and check_call_exit(row):
+        strength = determine_strength(row, "call")
+        if check_put_entry(row) or allow_top_rebound_put(row, prev_row):
+            strength_put = determine_strength(row, "put")
+            return ts, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）", "put"
+        return ts, f"⚠️ Call 出场信号（{strength}）", None
 
-    return signals
+    elif current_pos == "put" and check_put_exit(row):
+        strength = determine_strength(row, "put")
+        if check_call_entry(row) or allow_bottom_rebound_call(row, prev_row):
+            strength_call = determine_strength(row, "call")
+            return ts, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）", "call"
+        return ts, f"⚠️ Put 出场信号（{strength}）", None
 
-# ========= 回测入口 =========
-def backtest():
-    print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
-    df = fetch_data(BACKTEST_START, BACKTEST_END)
-    signals = generate_signals(df)
-    for sig in signals:
-        print(sig)
+    elif current_pos is None:
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            return ts, f"📈 主升浪 Call 入场（{strength}）", "call"
+        elif check_put_entry(row):
+            strength = determine_strength(row, "put")
+            return ts, f"📉 主跌浪 Put 入场（{strength}）", "put"
+        elif allow_bottom_rebound_call(row, prev_row):
+            strength = determine_strength(row, "call")
+            return ts, f"🟢 底部反弹 Call 捕捉（{strength}）", "call"
+        elif allow_top_rebound_put(row, prev_row):
+            strength = determine_strength(row, "put")
+            return ts, f"🔴 顶部反转 Put 捕捉（{strength}）", "put"
+        elif allow_call_reentry(row, prev_row):
+            strength = determine_strength(row, "call")
+            return ts, f"📈 趋势回补 Call 再入场（{strength}）", "call"
+        elif allow_put_reentry(row, prev_row):
+            strength = determine_strength(row, "put")
+            return ts, f"📉 趋势回补 Put 再入场（{strength}）", "put"
 
+    return None, None, current_pos
+
+# ========== 回测入口 ==========
+def backtest_main(start_date="2025-06-20", end_date="2025-06-27"):
+    print(f"[🔁 回测区间] {start_date} → {end_date}")
+    all_sessions = nasdaq.schedule(start_date=start_date, end_date=end_date)
+    if all_sessions.empty:
+        print("❌ 无有效交易日")
+        return
+
+    start = all_sessions.iloc[0]["market_open"].tz_convert(EST) - timedelta(hours=6)
+    end = all_sessions.iloc[-1]["market_close"].tz_convert(EST) + timedelta(hours=6)
+
+    df = yf.download(
+        SYMBOL,
+        start=start.tz_convert("UTC"),
+        end=end.tz_convert("UTC"),
+        interval="1m",
+        prepost=True,
+        progress=False,
+        auto_adjust=True
+    )
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    df = df.dropna(subset=["High", "Low", "Close", "Volume"])
+    df = df[df["Volume"] > 0]
+    df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'])
+    df['RSI_SLOPE'] = df['RSI'].diff(3)
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df = compute_macd(df)
+    df.ffill(inplace=True)
+    df.dropna(inplace=True)
+
+    current_pos = None
+    for i in range(6, len(df)):
+        df_slice = df.iloc[i-2:i+1]
+        ts, signal, new_pos = generate_signal(df_slice, current_pos)
+        if signal:
+            print(f"[{ts}] {signal}")
+            current_pos = new_pos
+
+# ========== 调用 ==========
 if __name__ == "__main__":
-    backtest()
+    backtest_main("2025-06-20", "2025-06-27")
