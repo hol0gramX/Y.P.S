@@ -1,5 +1,5 @@
-# ✅ 最新稳定版：spy_backtest_20250626.py 
-# 含 5分钟趋势判断，保存 CSV 用于 analyzer 分析
+# ✅ 最新稳定版：加入 VWAP 偏离 + 出场强度判断 + GitHub Actions 日志输出
+# 用于回测分析：spy_backtest_20250626.py
 
 import os
 import json
@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 SYMBOL = "SPY"
 STATE_FILE = "last_signal.json"
 EST = ZoneInfo("America/New_York")
-BACKTEST_CSV = "signal_log_backtest.csv"
 
 # -------- 时间函数 --------
 def get_est_now():
@@ -64,12 +63,17 @@ def get_latest_5min_trend(df_5min, ts):
 def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
 
 def determine_strength(row, direction):
+    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
     if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5: return "强"
-        elif row['RSI'] < 55: return "弱"
+        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
+            return "强"
+        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
+            return "弱"
     elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5: return "强"
-        elif row['RSI'] > 45: return "弱"
+        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
+            return "强"
+        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
+            return "弱"
     return "中"
 
 def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 50 and row['MACDh'] > -0.1 and strong_volume(row)
@@ -117,7 +121,6 @@ def main():
 
         state = load_last_signal()
         signals = []
-        rows = []
 
         for i in range(1, len(df)):
             row = df.iloc[i]
@@ -128,22 +131,24 @@ def main():
             trend_label = f"{trend_info['trend']}（5min）" if trend_info else "未知"
 
             if state["position"] == "call" and check_call_exit(row):
+                strength = determine_strength(row, "call")
                 state["position"] = "none"
                 if check_put_entry(row):
-                    strength = determine_strength(row, "put")
+                    strength_put = determine_strength(row, "put")
                     state["position"] = "put"
-                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength}，趋势：{trend_label}）"
+                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}，趋势：{trend_label}）"
                 else:
-                    signal = f"⚠️ Call 出场信号（趋势：{trend_label}）"
+                    signal = f"⚠️ Call 出场信号（{strength}，趋势：{trend_label}）"
 
             elif state["position"] == "put" and check_put_exit(row):
+                strength = determine_strength(row, "put")
                 state["position"] = "none"
                 if check_call_entry(row):
-                    strength = determine_strength(row, "call")
+                    strength_call = determine_strength(row, "call")
                     state["position"] = "call"
-                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength}，趋势：{trend_label}）"
+                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}，趋势：{trend_label}）"
                 else:
-                    signal = f"⚠️ Put 出场信号（趋势：{trend_label}）"
+                    signal = f"⚠️ Put 出场信号（{strength}，趋势：{trend_label}）"
 
             elif state["position"] == "none":
                 if check_call_entry(row):
@@ -156,21 +161,14 @@ def main():
                     signal = f"📉 主跌浪 Put 入场（{strength}，趋势：{trend_label}）"
 
             if signal:
-                signals.append(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
-                rows.append({"timestamp": time_est.isoformat(), "signal": signal})
+                print(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
                 save_last_signal(state)
 
-        if not signals:
-            print("[信息] 今日无信号生成")
-        else:
-            print("\n".join(signals))
-            pd.DataFrame(rows).to_csv(BACKTEST_CSV, index=False)
-            print(f"[✅ 保存完成] 写入 {BACKTEST_CSV} 共 {len(rows)} 条信号")
+        print("[✅ 回测结束] 全部信号已打印完成")
 
     except Exception as e:
         print(f"[❌ 回测失败] {e}")
 
 if __name__ == "__main__":
     main()
-
 
