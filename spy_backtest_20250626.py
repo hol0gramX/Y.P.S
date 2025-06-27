@@ -3,87 +3,87 @@ import json
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import pandas_market_calendars as mcal
 
 # ========= 配置区域 =========
-STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-nasdaq = mcal.get_calendar("NASDAQ")
+STATE_FILE = "last_signal.json"
+OUTPUT_FILE = "signal_log_backtest.csv"
 
-# ========= 工具函数 =========
-def get_est_now():
-    return datetime.now(tz=EST)
-
-def get_market_open_close(dt):
-    schedule = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
-    if schedule.empty:
-        return None, None
-    market_open = schedule.iloc[0]['market_open'].tz_convert(EST)
-    market_close = schedule.iloc[0]['market_close'].tz_convert(EST)
-    return market_open, market_close
-
+# ========= 数据获取 =========
 def fetch_data():
-    end = get_est_now()
-    start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m")
-    df = df.copy()  # 防止 SettingWithCopyWarning
-    df.index = df.index.tz_convert(EST)
+    start = (datetime.now(tz=EST) - timedelta(days=2)).strftime("%Y-%m-%d")
+    end = (datetime.now(tz=EST) + timedelta(days=1)).strftime("%Y-%m-%d")
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m", auto_adjust=False)
+
+    # 转换时区
+    if not df.index.tz:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+
+    # 扁平化列名，防止 pandas-ta 错误
+    df.columns = [str(col) for col in df.columns]
+
+    # 添加技术指标
     df.ta.rsi(length=14, append=True)
-    macd = ta.macd(df['Close'])
-    df = pd.concat([df, macd], axis=1)
-    df['RSI_Slope'] = df['RSI_14'].diff()
+    df.ta.macd(append=True)
+    df["RSI_slope"] = df["RSI_14"].diff()
+
     return df
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
-    return {"position": "none"}
-
-def save_state(state):
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f)
-
+# ========= 信号判断主逻辑 =========
 def generate_signals(df):
-    state = {"position": "none"}
     signals = []
-    for i in range(2, len(df)):
+    position = None
+
+    for i in range(1, len(df)):
         row = df.iloc[i]
-        rsi = row['RSI_14']
-        rsi_slope = row['RSI_Slope']
-        macd = row['MACD_12_26_9']
-        macdh = row['MACDh_12_26_9']
-        signal = None
+        prev = df.iloc[i - 1]
+        timestamp = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
-        if state['position'] == 'none':
-            if rsi > 53 and rsi_slope > 0.15 and macd > 0 and macdh > 0:
-                signal = "📈 主升浪 Call 入场（斜率确认）"
-                state['position'] = 'call'
-            elif rsi < 47 and rsi_slope < -0.15 and macd < 0 and macdh < 0:
-                signal = "📉 主跌浪 Put 入场（斜率确认）"
-                state['position'] = 'put'
-        elif state['position'] == 'call':
-            if rsi < 50:
-                signal = "⚠️ Call 出场信号"
-                state['position'] = 'none'
-        elif state['position'] == 'put':
-            if rsi > 50:
-                signal = "⚠️ Put 出场信号"
-                state['position'] = 'none'
+        rsi = row["RSI_14"]
+        macd = row["MACD_12_26_9"]
+        macdh = row["MACDh_12_26_9"]
+        slope = row["RSI_slope"]
 
-        if signal:
-            signals.append((df.index[i], signal))
+        # ---- 斜率突变逻辑 ----
+        slope_rising = slope > 0.5 and prev["RSI_slope"] <= 0.2
+
+        # ---- 入场逻辑 ----
+        if position is None:
+            if rsi > 53 and macd > 0 and macdh > 0 and slope_rising:
+                signals.append(f"[{timestamp}] 📈 主升浪 Call 入场（斜率突变，趋势确认）")
+                position = "CALL"
+            elif rsi < 40 and macd < 0 and macdh < 0:
+                signals.append(f"[{timestamp}] 📉 主跌浪 Put 入场（趋势确认）")
+                position = "PUT"
+
+        # ---- 出场逻辑 ----
+        elif position == "CALL":
+            if rsi < 50 or macdh < 0:
+                signals.append(f"[{timestamp}] ⚠️ Call 出场信号")
+                position = None
+        elif position == "PUT":
+            if rsi > 45 or macdh > 0:
+                signals.append(f"[{timestamp}] ⚠️ Put 出场信号")
+                position = None
+
     return signals
 
+# ========= 回测函数 =========
 def backtest():
-    print(f"[🔁 回测开始] {get_est_now().isoformat()}")
+    print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
     df = fetch_data()
     signals = generate_signals(df)
-    for timestamp, signal in signals:
-        print(f"[{timestamp.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
 
+    for s in signals:
+        print(s)
+
+    # 保存为 CSV
+    df_signals = pd.DataFrame(signals, columns=["signal"])
+    df_signals.to_csv(OUTPUT_FILE, index=False)
+    print(f"[✅ 保存完成] 写入 {OUTPUT_FILE} 共 {len(signals)} 条信号")
+
+# ========= 执行 =========
 if __name__ == "__main__":
-    backtest()
