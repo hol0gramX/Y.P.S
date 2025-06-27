@@ -143,8 +143,13 @@ def backtest_main(start_date="2025-06-20", end_date="2025-06-27"):
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['Date'] = df.index.date
-    df['VWAP'] = df.groupby('Date').apply(lambda g: (g['Close'] * g['Volume']).cumsum() / g['Volume'].cumsum())
-    df['VWAP'] = df['VWAP'].reset_index(level=0, drop=True)
+
+    # ✅ 修复后的 VWAP 计算（不触发警告，确保索引对齐）
+    df['VWAP'] = (
+        df.groupby('Date', group_keys=False)
+          .apply(lambda g: (g['Close'] * g['Volume']).cumsum() / g['Volume'].cumsum())
+    )
+
     df = compute_macd(df)
     df.ffill(inplace=True)
     df.dropna(inplace=True)
