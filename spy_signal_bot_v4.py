@@ -124,6 +124,7 @@ def get_data():
     df = df[mask]
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
+    df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
     df.ffill(inplace=True)
@@ -146,12 +147,31 @@ def determine_strength(row, direction):
             return "弱"
     return "中"
 
-def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 50 and row['MACDh'] > -0.1 and strong_volume(row)
-def check_put_entry(row): return row['Close'] < row['VWAP'] and row['RSI'] < 51 and row['MACDh'] < 0.15 and strong_volume(row)
-def check_call_exit(row): return row['RSI'] < 48 and strong_volume(row)
-def check_put_exit(row): return row['RSI'] > 52 and strong_volume(row)
-def allow_call_reentry(row, prev): return prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row)
-def allow_put_reentry(row, prev): return prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row)
+def check_call_entry(row):
+    return (row['Close'] > row['VWAP'] and
+            row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and
+            row['RSI_SLOPE'] > 0.15 and strong_volume(row))
+
+def check_put_entry(row):
+    return (row['Close'] < row['VWAP'] and
+            row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and
+            row['RSI_SLOPE'] < -0.15 and strong_volume(row))
+
+def check_call_exit(row):
+    return (row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and
+            (row['MACD'] < 0.05 or row['MACDh'] < 0.05))
+
+def check_put_exit(row):
+    return (row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and
+            (row['MACD'] > -0.05 or row['MACDh'] > -0.05))
+
+def allow_call_reentry(row, prev):
+    return (prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and
+            row['RSI'] > 53 and row['MACDh'] > 0.1 and strong_volume(row))
+
+def allow_put_reentry(row, prev):
+    return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and
+            row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row))
 
 # --------- 收盘清仓 ---------
 def check_market_closed_and_clear():
@@ -265,6 +285,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
