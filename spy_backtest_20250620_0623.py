@@ -8,119 +8,160 @@ from zoneinfo import ZoneInfo
 # ========= 配置 =========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
+PREMARKET_START = datetime.strptime("04:00:00", "%H:%M:%S").time()
+REGULAR_START = datetime.strptime("09:30:00", "%H:%M:%S").time()
+MARKET_END = datetime.strptime("16:00:00", "%H:%M:%S").time()
 
 # ========= 数据获取 =========
-def fetch_data(start_date, end_date):
-    df = yf.download(SYMBOL, start=start_date, end=end_date + timedelta(days=1), interval="1m", progress=False)
-    df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
-    if df.index.tz is None:
+def fetch_data():
+    end = datetime.now(tz=EST)
+    start = end - timedelta(days=2)
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
+    df.columns = df.columns.get_level_values(0)
+    df.index.name = "Datetime"
+    if not df.index.tz:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
     df = df[~df.index.duplicated(keep='last')]
+
     df.ta.rsi(length=14, append=True)
     macd = df.ta.macd(fast=12, slow=26, signal=9)
-    bbands = df.ta.bbands(length=20)
-    df = pd.concat([df, macd, bbands], axis=1)
+    df = pd.concat([df, macd], axis=1)
+
     df["RSI"] = df["RSI_14"]
     df["MACD"] = df["MACD_12_26_9"]
     df["MACDh"] = df["MACDh_12_26_9"]
     df["MACDs"] = df["MACDs_12_26_9"]
-    df["BBU"] = df["BBU_20_2.0"]
-    df["BBL"] = df["BBL_20_2.0"]
+    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df["RSI_SLOPE"] = df["RSI"].diff(3)
     df = df.dropna()
     return df
 
-# ========= RSI 斜率 =========
-def calculate_rsi_slope(df, period=5):
-    rsi = df["RSI"]
-    slope = (rsi - rsi.shift(period)) / period
-    return slope
-
-# ========= 反弹判断 =========
-def allow_bottom_rebound_call(row, prev):
-    return (
-        row['Close'] < row['BBL'] and
-        row['RSI'] > prev['RSI'] and
-        row['MACDh'] > prev['MACDh'] and
-        row['MACD'] > -0.3 and
-        row['Volume'] > prev['Volume'].rolling(5).mean()
-    )
-
-def allow_top_rebound_put(row, prev):
-    return (
-        row['Close'] > row['BBU'] and
-        row['RSI'] < prev['RSI'] and
-        row['MACDh'] < prev['MACDh'] and
-        row['MACD'] < 0.3 and
-        row['Volume'] > prev['Volume'].rolling(5).mean()
-    )
+# ========= 信号强度判断 =========
+def determine_strength(row, direction):
+    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
+    if direction == "call":
+        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
+            return "强"
+        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
+            return "弱"
+    elif direction == "put":
+        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
+            return "强"
+        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
+            return "弱"
+    return "中"
 
 # ========= 信号生成 =========
 def generate_signals(df):
     signals = []
-    last_signal_time = None
-    last_signal_type = None
     in_position = None
 
     for i in range(5, len(df)):
         row = df.iloc[i]
-        prev = df.iloc[i - 1]
+        prev_row = df.iloc[i - 1]
+        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
+
+        now_time = row.name.time()
+
+        # 🕓 04:00 前不做任何判断
+        if now_time < PREMARKET_START:
+            continue
+
+        # ⛔️ 非盘中（盘前/盘后）仅采集数据，不做信号判断
+        if not (REGULAR_START <= now_time <= MARKET_END):
+            continue
+
+        # 🕘 每天开盘第一根K线默认清空仓位
+        if now_time == REGULAR_START:
+            in_position = None
+
         rsi = row["RSI"]
+        slope = row["RSI_SLOPE"]
         macd = row["MACD"]
         macdh = row["MACDh"]
-        slope = calculate_rsi_slope(df.iloc[i - 5:i + 1]).iloc[-1]
-        ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
-        strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
+        vol_ok = row['Volume'] >= row['Vol_MA5']
 
-        exited = False
+        direction = "call" if in_position != "PUT" else "put"
+        strength = determine_strength(row, direction)
 
-        if in_position == "CALL" and rsi < 50 and slope < 0 and macd < 0:
-            signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
-            in_position = None
-            exited = True
+        # === Call 出场 ===
+        if in_position == "CALL":
+            if rsi < 50 and slope < 0 and (macd < 0.05 or macdh < 0.05):
+                signals.append(f"[{ts}] ⚠️ Call 出场信号（{strength}）")
+                in_position = None
+                continue
 
-        elif in_position == "PUT" and rsi > 50 and slope > 0 and macd > 0:
-            signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
-            in_position = None
-            exited = True
+        # === Put 出场 ===
+        if in_position == "PUT":
+            if rsi > 50 and slope > 0 and (macd > -0.05 or macdh > -0.05):
+                signals.append(f"[{ts}] ⚠️ Put 出场信号（{strength}）")
+                in_position = None
+                continue
 
-        if in_position is None and (last_signal_time is None or row.name != last_signal_time):
-            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
+        # === Call 入场 ===
+        if in_position != "CALL":
+            allow_call = (
+                row['Close'] > row['VWAP'] and
+                rsi > 53 and slope > 0.15 and
+                macd > 0 and macdh > 0 and
+                vol_ok
+            )
+            if allow_call:
                 signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}）")
                 in_position = "CALL"
-                last_signal_type = "CALL"
-                last_signal_time = row.name
+                continue
 
-            elif rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
+        # === Put 入场 ===
+        if in_position != "PUT":
+            allow_put = (
+                row['Close'] < row['VWAP'] and
+                rsi < 47 and slope < -0.15 and
+                macd < 0 and macdh < 0 and
+                vol_ok
+            )
+            if allow_put:
                 signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}）")
                 in_position = "PUT"
-                last_signal_type = "PUT"
-                last_signal_time = row.name
+                continue
 
-            elif allow_bottom_rebound_call(row, prev):
-                signals.append(f"[{ts}] 📉 底部反弹 Call 捕捉（评分：4/5）")
+        # === ✅ 趋势回补 Call ===
+        if in_position is None:
+            allow_call = (
+                row['Close'] > row['VWAP'] and
+                rsi > 53 and slope > 0.15 and
+                macd > 0 and macdh > 0 and
+                vol_ok
+            )
+            if allow_call:
+                signals.append(f"[{ts}] 📈 趋势回补 Call 再入场（{strength}）")
                 in_position = "CALL"
-                last_signal_type = "CALL"
-                last_signal_time = row.name
+                continue
 
-            elif allow_top_rebound_put(row, prev):
-                signals.append(f"[{ts}] 📈 顶部反转 Put 捕捉（评分：3/5）")
+        # === ✅ 趋势回补 Put ===
+        if in_position is None:
+            allow_put = (
+                row['Close'] < row['VWAP'] and
+                rsi < 47 and slope < -0.15 and
+                macd < 0 and macdh < 0 and
+                vol_ok
+            )
+            if allow_put:
+                signals.append(f"[{ts}] 📉 趋势回补 Put 再入场（{strength}）")
                 in_position = "PUT"
-                last_signal_type = "PUT"
-                last_signal_time = row.name
+                continue
 
     return signals
 
 # ========= 回测入口 =========
-def backtest(start_date, end_date):
-    print(f"[🔁 回测开始] {start_date.strftime('%Y-%m-%d')} 到 {end_date.strftime('%Y-%m-%d')}")
-    df = fetch_data(start_date, end_date)
+def backtest():
+    print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
+    df = fetch_data()
     signals = generate_signals(df)
     for sig in signals:
         print(sig)
 
 if __name__ == "__main__":
-    start = datetime(2025, 6, 25, tzinfo=EST)
-    end = datetime(2025, 6, 27, tzinfo=EST)
-    backtest(start, end)
+    backtest()
