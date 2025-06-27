@@ -2,21 +2,33 @@ import os
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_market_calendars as mcal
 
 # ========= 配置 =========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-PREMARKET_START = datetime.strptime("04:00:00", "%H:%M:%S").time()
-REGULAR_START = datetime.strptime("09:30:00", "%H:%M:%S").time()
-MARKET_END = datetime.strptime("16:00:00", "%H:%M:%S").time()
+nasdaq = mcal.get_calendar("NASDAQ")
+
+# ========= 回测日期 =========
+BACKTEST_START = "2024-06-20"
+BACKTEST_END = "2024-06-27"
+
+PREMARKET_START = time(4, 0)
+REGULAR_START = time(9, 30)
+REGULAR_END = time(16, 0)
 
 # ========= 数据获取 =========
-def fetch_data():
-    end = datetime.now(tz=EST)
-    start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True)
+def fetch_data(start_date, end_date):
+    trade_days = nasdaq.valid_days(start_date=start_date, end_date=end_date)
+    if len(trade_days) == 0:
+        raise ValueError("无有效交易日")
+
+    start = pd.Timestamp(trade_days[0]).tz_localize(EST) - timedelta(hours=6)
+    end = pd.Timestamp(trade_days[-1]).tz_localize(EST) + timedelta(hours=6)
+
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m", prepost=True, progress=False)
     df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
     if not df.index.tz:
@@ -63,18 +75,14 @@ def generate_signals(df):
         row = df.iloc[i]
         prev_row = df.iloc[i - 1]
         ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
-
         now_time = row.name.time()
 
-        # 🕓 04:00 前不做任何判断
         if now_time < PREMARKET_START:
             continue
 
-        # ⛔️ 非盘中（盘前/盘后）仅采集数据，不做信号判断
-        if not (REGULAR_START <= now_time <= MARKET_END):
+        if not (REGULAR_START <= now_time <= REGULAR_END):
             continue
 
-        # 🕘 每天开盘第一根K线默认清空仓位
         if now_time == REGULAR_START:
             in_position = None
 
@@ -87,68 +95,54 @@ def generate_signals(df):
         direction = "call" if in_position != "PUT" else "put"
         strength = determine_strength(row, direction)
 
-        # === Call 出场 ===
+        # === Call 出场 + Put 反手 ===
         if in_position == "CALL":
             if rsi < 50 and slope < 0 and (macd < 0.05 or macdh < 0.05):
                 signals.append(f"[{ts}] ⚠️ Call 出场信号（{strength}）")
                 in_position = None
+                # 反手 Put
+                if row['Close'] < row['VWAP'] and rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and vol_ok:
+                    strength_put = determine_strength(row, "put")
+                    signals.append(f"[{ts}] 🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）")
+                    in_position = "PUT"
                 continue
 
-        # === Put 出场 ===
+        # === Put 出场 + Call 反手 ===
         if in_position == "PUT":
             if rsi > 50 and slope > 0 and (macd > -0.05 or macdh > -0.05):
                 signals.append(f"[{ts}] ⚠️ Put 出场信号（{strength}）")
                 in_position = None
+                # 反手 Call
+                if row['Close'] > row['VWAP'] and rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and vol_ok:
+                    strength_call = determine_strength(row, "call")
+                    signals.append(f"[{ts}] 🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）")
+                    in_position = "CALL"
                 continue
 
         # === Call 入场 ===
         if in_position != "CALL":
-            allow_call = (
-                row['Close'] > row['VWAP'] and
-                rsi > 53 and slope > 0.15 and
-                macd > 0 and macdh > 0 and
-                vol_ok
-            )
-            if allow_call:
+            if row['Close'] > row['VWAP'] and rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and vol_ok:
                 signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}）")
                 in_position = "CALL"
                 continue
 
         # === Put 入场 ===
         if in_position != "PUT":
-            allow_put = (
-                row['Close'] < row['VWAP'] and
-                rsi < 47 and slope < -0.15 and
-                macd < 0 and macdh < 0 and
-                vol_ok
-            )
-            if allow_put:
+            if row['Close'] < row['VWAP'] and rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and vol_ok:
                 signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}）")
                 in_position = "PUT"
                 continue
 
-        # === ✅ 趋势回补 Call ===
+        # === 趋势回补 Call ===
         if in_position is None:
-            allow_call = (
-                row['Close'] > row['VWAP'] and
-                rsi > 53 and slope > 0.15 and
-                macd > 0 and macdh > 0 and
-                vol_ok
-            )
-            if allow_call:
+            if row['Close'] > row['VWAP'] and rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and vol_ok:
                 signals.append(f"[{ts}] 📈 趋势回补 Call 再入场（{strength}）")
                 in_position = "CALL"
                 continue
 
-        # === ✅ 趋势回补 Put ===
+        # === 趋势回补 Put ===
         if in_position is None:
-            allow_put = (
-                row['Close'] < row['VWAP'] and
-                rsi < 47 and slope < -0.15 and
-                macd < 0 and macdh < 0 and
-                vol_ok
-            )
-            if allow_put:
+            if row['Close'] < row['VWAP'] and rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and vol_ok:
                 signals.append(f"[{ts}] 📉 趋势回补 Put 再入场（{strength}）")
                 in_position = "PUT"
                 continue
@@ -157,8 +151,8 @@ def generate_signals(df):
 
 # ========= 回测入口 =========
 def backtest():
-    print(f"[🔁 回测开始] {datetime.now(tz=EST)}")
-    df = fetch_data()
+    print(f"[\U0001f501 回测开始] {datetime.now(tz=EST)}")
+    df = fetch_data(BACKTEST_START, BACKTEST_END)
     signals = generate_signals(df)
     for sig in signals:
         print(sig)
