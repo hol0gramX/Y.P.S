@@ -2,16 +2,16 @@ import os
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
-# 配置
+# ========== 主配置 ==========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ===== 技术指标函数（镜像主策略） =====
+# ========== 技术指标函数 ==========
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -66,10 +66,11 @@ def allow_call_reentry(row, prev):
 def allow_put_reentry(row, prev):
     return (prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05 and strong_volume(row))
 
-# ===== 信号判断主逻辑（镜像） =====
+# ========== 信号判断 ==========
 def generate_signal(df_slice, current_pos):
     if len(df_slice) < 2:
         return None, None, current_pos
+
     row = df_slice.iloc[-1]
     prev_row = df_slice.iloc[-2]
     ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
@@ -110,16 +111,21 @@ def generate_signal(df_slice, current_pos):
 
     return None, None, current_pos
 
-# ===== 回测入口（支持日期自定义） =====
+# ========== 回测入口 ==========
 def backtest_main(start_date="2025-06-20", end_date="2025-06-27"):
     print(f"[🔁 回测区间] {start_date} → {end_date}")
-    start_dt = pd.Timestamp(start_date).replace(tzinfo=EST) - timedelta(hours=6)
-    end_dt = pd.Timestamp(end_date).replace(tzinfo=EST) + timedelta(hours=6)
+    all_sessions = nasdaq.schedule(start_date=start_date, end_date=end_date)
+    if all_sessions.empty:
+        print("❌ 无有效交易日")
+        return
+
+    start = all_sessions.iloc[0]["market_open"].tz_convert(EST) - timedelta(hours=6)
+    end = all_sessions.iloc[-1]["market_close"].tz_convert(EST) + timedelta(hours=6)
 
     df = yf.download(
         SYMBOL,
-        start=start_dt.tz_convert("UTC"),
-        end=end_dt.tz_convert("UTC"),
+        start=start.tz_convert("UTC"),
+        end=end.tz_convert("UTC"),
         interval="1m",
         prepost=True,
         progress=False,
@@ -133,25 +139,25 @@ def backtest_main(start_date="2025-06-20", end_date="2025-06-27"):
     df = df[df["Volume"] > 0]
     df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
 
-    # 日内VWAP重置
-    df["Date"] = df.index.date
-    df["Vol_MA5"] = df.groupby("Date")["Volume"].transform(lambda x: x.rolling(5).mean())
-    df["RSI"] = compute_rsi(df["Close"])
-    df["RSI_SLOPE"] = df["RSI"].diff(3)
-    df["VWAP"] = df.groupby("Date").apply(lambda g: (g["Close"] * g["Volume"]).cumsum() / g["Volume"].cumsum()).reset_index(level=0, drop=True)
+    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
+    df['RSI'] = compute_rsi(df['Close'])
+    df['RSI_SLOPE'] = df['RSI'].diff(3)
+    df['Date'] = df.index.date
+    df['VWAP'] = df.groupby('Date').apply(lambda g: (g['Close'] * g['Volume']).cumsum() / g['Volume'].cumsum())
+    df['VWAP'] = df['VWAP'].reset_index(level=0, drop=True)
     df = compute_macd(df)
     df.ffill(inplace=True)
     df.dropna(inplace=True)
 
     current_pos = None
     for i in range(6, len(df)):
-        df_slice = df.iloc[i - 2:i + 1]
+        df_slice = df.iloc[i-2:i+1]
         ts, signal, new_pos = generate_signal(df_slice, current_pos)
         if signal:
             print(f"[{ts}] {signal}")
             current_pos = new_pos
 
-# ===== 调用 =====
+# ========== 调用 ==========
 if __name__ == "__main__":
     backtest_main("2025-06-20", "2025-06-27")
 
