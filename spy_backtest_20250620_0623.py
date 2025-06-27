@@ -44,7 +44,7 @@ def allow_bottom_rebound_call(row, prev):
         row['RSI'] > prev['RSI'] and
         row['MACDh'] > prev['MACDh'] and
         row['MACD'] > -0.3 and
-        row['Volume'] > row['Volume'].rolling(5).mean()
+        row['Volume'] > prev['Volume'].rolling(5).mean()
     )
 
 def allow_top_rebound_put(row, prev):
@@ -53,13 +53,14 @@ def allow_top_rebound_put(row, prev):
         row['RSI'] < prev['RSI'] and
         row['MACDh'] < prev['MACDh'] and
         row['MACD'] < 0.3 and
-        row['Volume'] > row['Volume'].rolling(5).mean()
+        row['Volume'] > prev['Volume'].rolling(5).mean()
     )
 
 # ========= 信号生成 =========
 def generate_signals(df):
     signals = []
-    in_position = None
+    last_signal_time = None
+    last_signal_type = None
     for i in range(5, len(df)):
         row = df.iloc[i]
         prev = df.iloc[i - 1]
@@ -70,29 +71,33 @@ def generate_signals(df):
         ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
         strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
 
-        if in_position == "CALL":
+        if last_signal_type == "CALL":
             if rsi < 50 and slope < 0 and macd < 0:
                 signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
-                in_position = None
+                last_signal_type = None
 
-        elif in_position == "PUT":
+        elif last_signal_type == "PUT":
             if rsi > 50 and slope > 0 and macd > 0:
                 signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
-                in_position = None
+                last_signal_type = None
 
-        if in_position is None:
+        if last_signal_type is None or row.name != last_signal_time:
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
                 signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}）")
-                in_position = "CALL"
+                last_signal_type = "CALL"
+                last_signal_time = row.name
             elif rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
                 signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}）")
-                in_position = "PUT"
+                last_signal_type = "PUT"
+                last_signal_time = row.name
             elif allow_bottom_rebound_call(row, prev):
                 signals.append(f"[{ts}] 📉 底部反弹 Call 捕捉（评分：4/5）")
-                in_position = "CALL"
+                last_signal_type = "CALL"
+                last_signal_time = row.name
             elif allow_top_rebound_put(row, prev):
                 signals.append(f"[{ts}] 📈 顶部反转 Put 捕捉（评分：3/5）")
-                in_position = "PUT"
+                last_signal_type = "PUT"
+                last_signal_time = row.name
 
     return signals
 
@@ -108,4 +113,3 @@ if __name__ == "__main__":
     start = datetime(2025, 6, 20, tzinfo=EST)
     end = datetime(2025, 6, 24, tzinfo=EST)
     backtest(start, end)
-
