@@ -14,6 +14,7 @@ def fetch_data():
     end = datetime.now(tz=EST)
     start = end - timedelta(days=2)
     df = yf.download(SYMBOL, start=start, end=end, interval="1m")
+    df.columns = df.columns.get_level_values(0)  # 扁平化，防止 MultiIndex
     df.index.name = "Datetime"
     if not df.index.tz:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
@@ -29,6 +30,7 @@ def fetch_data():
     df["MACDs"] = df["MACDs_12_26_9"]
     df = df.dropna()
     return df
+
 
 # ========= 斜率函数 =========
 def calculate_rsi_slope(df, period=5):
