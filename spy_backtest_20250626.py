@@ -31,7 +31,6 @@ def fetch_data():
     df = df.dropna()
     return df
 
-
 # ========= 斜率函数 =========
 def calculate_rsi_slope(df, period=5):
     rsi = df["RSI"]
@@ -42,7 +41,8 @@ def calculate_rsi_slope(df, period=5):
 def generate_signals(df):
     signals = []
     in_position = None
-    last_signal_time = None
+    last_signal_strength = None
+    last_entry_time = None
 
     for i in range(5, len(df)):
         row = df.iloc[i]
@@ -52,25 +52,43 @@ def generate_signals(df):
         slope = calculate_rsi_slope(df.iloc[i-5:i+1]).iloc[-1]
         ts = row.name.strftime("%Y-%m-%d %H:%M:%S")
 
+        strength = ""
+        if abs(slope) > 0.4:
+            strength = "强"
+        elif abs(slope) > 0.2:
+            strength = "中"
+        else:
+            strength = "弱"
+
+        # Call 入场条件
         if in_position != "CALL":
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
-                signals.append(f"[{ts}] 📈 主升浪 Call 入场（趋势：增强）")
-                in_position = "CALL"
-                last_signal_time = ts
+                if not (last_entry_time and (row.name - last_entry_time).seconds < 300 and last_signal_strength == strength):
+                    signals.append(f"[{ts}] 📈 主升浪 Call 入场（{strength}，趋势：增强）")
+                    in_position = "CALL"
+                    last_signal_strength = strength
+                    last_entry_time = row.name
+
         elif in_position == "CALL":
             if rsi < 50 or slope < 0:
                 signals.append(f"[{ts}] ⚠️ Call 出场信号（趋势：转弱）")
                 in_position = None
+                last_signal_strength = None
 
+        # Put 入场条件
         if in_position != "PUT":
             if rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
-                signals.append(f"[{ts}] 📉 主跌浪 Put 入场（趋势：增强）")
-                in_position = "PUT"
-                last_signal_time = ts
+                if not (last_entry_time and (row.name - last_entry_time).seconds < 300 and last_signal_strength == strength):
+                    signals.append(f"[{ts}] 📉 主跌浪 Put 入场（{strength}，趋势：增强）")
+                    in_position = "PUT"
+                    last_signal_strength = strength
+                    last_entry_time = row.name
+
         elif in_position == "PUT":
             if rsi > 50 or slope > 0:
                 signals.append(f"[{ts}] ⚠️ Put 出场信号（趋势：转弱）")
                 in_position = None
+                last_signal_strength = None
 
     return signals
 
@@ -84,3 +102,4 @@ def backtest():
 
 if __name__ == "__main__":
     backtest()
+
