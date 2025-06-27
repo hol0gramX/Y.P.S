@@ -13,7 +13,7 @@ EST = ZoneInfo("America/New_York")
 def fetch_data():
     end = datetime.now(tz=EST)
     start = end - timedelta(days=2)
-    df = yf.download(SYMBOL, start=start, end=end, interval="1m")
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m", auto_adjust=False)
     df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
     if not df.index.tz:
@@ -21,18 +21,24 @@ def fetch_data():
     else:
         df.index = df.index.tz_convert(EST)
     df = df[~df.index.duplicated(keep='last')]
-    df.columns = [c.lower() for c in df.columns]  # 修复 close 错误
+    df.columns = [c.lower() for c in df.columns]
 
-    # 加指标
-    df.ta.rsi(length=14, append=True)
-    df = pd.concat([df, df.ta.macd(fast=12, slow=26, signal=9)], axis=1)
-    df = pd.concat([df, df.ta.bbands(length=20, std=2)], axis=1)
-    df["RSI"] = df["rsi_14"]
-    df["MACD"] = df["macd_12_26_9"]
-    df["MACDh"] = df["macdh_12_26_9"]
-    df["MACDs"] = df["macds_12_26_9"]
+    # 计算 RSI
+    df["rsi"] = ta.rsi(df["close"], length=14)
+
+    # 计算 MACD 和 布林带
+    df = pd.concat([df, ta.macd(df["close"], fast=12, slow=26, signal=9)], axis=1)
+    df = pd.concat([df, ta.bbands(df["close"], length=20, std=2)], axis=1)
+
+    # 重命名统一指标列
+    df["RSI"] = df["rsi"]
+    df["MACD"] = df["MACD_12_26_9"]
+    df["MACDh"] = df["MACDh_12_26_9"]
+    df["MACDs"] = df["MACDs_12_26_9"]
+
     df = df.dropna()
     return df
+
 
 # ========= RSI 斜率 =========
 def calculate_rsi_slope(df, period=5):
