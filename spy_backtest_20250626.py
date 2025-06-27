@@ -1,174 +1,89 @@
-# ✅ 最新稳定版：加入 VWAP 偏离 + 出场强度判断 + GitHub Actions 日志输出
-# 用于回测分析：spy_backtest_20250626.py
-
+# ========= 配置区域 =========
 import os
 import json
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_market_calendars as mcal
 
-# -------- 配置 --------
+STATE_FILE = os.path.abspath("last_signal.json")
 SYMBOL = "SPY"
-STATE_FILE = "last_signal.json"
 EST = ZoneInfo("America/New_York")
+nasdaq = mcal.get_calendar("NASDAQ")
 
-# -------- 时间函数 --------
+# ========= 工具函数 =========
 def get_est_now():
     return datetime.now(tz=EST)
 
-# -------- 指标计算 --------
-def compute_rsi(s, length=14):
-    delta = s.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    rs = up.rolling(length).mean() / down.rolling(length).mean()
-    return (100 - 100 / (1 + rs)).fillna(50)
+def is_market_open(dt):
+    schedule = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
+    if schedule.empty:
+        return False
+    market_open = schedule.iloc[0]['market_open'].tz_convert(EST)
+    market_close = schedule.iloc[0]['market_close'].tz_convert(EST)
+    return market_open <= dt <= market_close
 
-def compute_macd(df):
-    macd = ta.macd(df['Close'])
-    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
-    return df
-
-# -------- 趋势判断 --------
-def get_latest_5min_trend(df_5min, ts):
-    try:
-        recent = df_5min.loc[(df_5min.index <= ts) & (df_5min.index > ts - timedelta(hours=2))]
-        if recent.empty:
-            return None
-
-        macd = ta.macd(recent['Close'])
-        if macd is None or macd.empty:
-            return None
-
-        macdh = macd['MACDh_12_26_9'].dropna()
-        if macdh.empty or len(macdh) < 5:
-            return None
-
-        recent_macdh = macdh.iloc[-5:]
-        if (recent_macdh > 0).all():
-            return {"trend": "📈上涨"}
-        elif (recent_macdh < 0).all():
-            return {"trend": "📉下跌"}
-        else:
-            return {"trend": "🔁震荡"}
-    except Exception as e:
-        print(f"[5min趋势判断失败] {e}")
-        return None
-
-# -------- 信号判断逻辑 --------
-def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
-
-def determine_strength(row, direction):
-    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
-    if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
-            return "强"
-        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
-            return "弱"
-    elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
-            return "强"
-        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
-            return "弱"
-    return "中"
-
-def check_call_entry(row): return row['Close'] > row['VWAP'] and row['RSI'] > 50 and row['MACDh'] > -0.1 and strong_volume(row)
-def check_put_entry(row): return row['Close'] < row['VWAP'] and row['RSI'] < 51 and row['MACDh'] < 0.15 and strong_volume(row)
-def check_call_exit(row): return row['RSI'] < 48 and strong_volume(row)
-def check_put_exit(row): return row['RSI'] > 52 and strong_volume(row)
-
-def load_last_signal():
+def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE, 'r') as f:
             return json.load(f)
-    return {"position": "none"}
+    return {"position": "none", "last_signal_time": ""}
 
-def save_last_signal(state):
+def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-# -------- 数据获取 --------
-def get_data():
-    now = get_est_now()
-    end_dt = now.replace(hour=16, minute=0, second=1, microsecond=0)
-    start_dt = end_dt - timedelta(days=2)
-    df = yf.download(SYMBOL, interval="1m", start=start_dt, end=end_dt, progress=False, prepost=True, auto_adjust=True)
-    if df.empty: raise ValueError("下载失败或数据为空")
-    df.columns = df.columns.get_level_values(0) if isinstance(df.columns, pd.MultiIndex) else df.columns
-    df = df.dropna(subset=['High','Low','Close','Volume'])
-    df = df[df['Volume'] > 0]
-    df.index = df.index.tz_localize('UTC').tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
-    df['RSI'] = compute_rsi(df['Close'])
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-    df = compute_macd(df)
-    df.ffill(inplace=True)
-    return df.dropna()
+# ========= 主逻辑 =========
+def fetch_data():
+    end = get_est_now()
+    start = end - timedelta(days=2)
+    df = yf.download(SYMBOL, start=start, end=end, interval="1m")
+    df.dropna(inplace=True)
+    df.ta.rsi(length=14, append=True)
+    macd = ta.macd(df['Close'])
+    df = pd.concat([df, macd], axis=1)
+    return df
 
-# -------- 主流程 --------
-def main():
-    print(f"[🔁 回测开始] {get_est_now().isoformat()}")
-    try:
-        df = get_data()
-        df_5min = yf.download(SYMBOL, interval='5m', period='2d', progress=False, auto_adjust=True)
-        if df_5min.empty:
-            raise ValueError("5分钟数据为空，无法判断趋势")
-        df_5min.index = df_5min.index.tz_localize("UTC").tz_convert(EST) if df_5min.index.tz is None else df_5min.index.tz_convert(EST)
+def detect_signals(df):
+    signals = []
+    for i in range(35, len(df)):
+        ts = df.index[i]
+        rsi = df['RSI_14'].iloc[i]
+        rsi_slope = df['RSI_14'].iloc[i] - df['RSI_14'].iloc[i-3]
+        macd_hist = df['MACDh_12_26_9'].iloc[i]
+        macd_hist_prev = df['MACDh_12_26_9'].iloc[i-1]
 
-        state = load_last_signal()
-        signals = []
+        price = df['Close'].iloc[i]
+        volume = df['Volume'].iloc[i]
 
-        for i in range(1, len(df)):
-            row = df.iloc[i]
-            time_est = row.name
-            signal = None
+        # ========== 多头入场增强判断 ==========
+        if rsi > 60 and macd_hist > 0 and macd_hist > macd_hist_prev:
+            signals.append((ts, "📈 主升浪 Call 入场（增强RSI+MACD判断）"))
+        elif rsi > 50 and rsi_slope > 6 and macd_hist > 0:
+            signals.append((ts, "📈 主升浪 Call 启动信号（RSI拔地+MACD背书）"))
 
-            trend_info = get_latest_5min_trend(df_5min, time_est)
-            trend_label = f"{trend_info['trend']}（5min）" if trend_info else "未知"
+        # ========== 空头入场增强判断 ==========
+        elif rsi < 40 and macd_hist < 0 and macd_hist < macd_hist_prev:
+            signals.append((ts, "📉 主跌浪 Put 入场（增强RSI+MACD判断）"))
+        elif rsi < 50 and rsi_slope < -6 and macd_hist < 0:
+            signals.append((ts, "📉 主跌浪 Put 启动信号（RSI坠崖+MACD背书）"))
 
-            if state["position"] == "call" and check_call_exit(row):
-                strength = determine_strength(row, "call")
-                state["position"] = "none"
-                if check_put_entry(row):
-                    strength_put = determine_strength(row, "put")
-                    state["position"] = "put"
-                    signal = f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}，趋势：{trend_label}）"
-                else:
-                    signal = f"⚠️ Call 出场信号（{strength}，趋势：{trend_label}）"
+    return signals
 
-            elif state["position"] == "put" and check_put_exit(row):
-                strength = determine_strength(row, "put")
-                state["position"] = "none"
-                if check_call_entry(row):
-                    strength_call = determine_strength(row, "call")
-                    state["position"] = "call"
-                    signal = f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}，趋势：{trend_label}）"
-                else:
-                    signal = f"⚠️ Put 出场信号（{strength}，趋势：{trend_label}）"
+def backtest():
+    df = fetch_data()
+    signals = detect_signals(df)
 
-            elif state["position"] == "none":
-                if check_call_entry(row):
-                    strength = determine_strength(row, "call")
-                    state["position"] = "call"
-                    signal = f"📈 主升浪 Call 入场（{strength}，趋势：{trend_label}）"
-                elif check_put_entry(row):
-                    strength = determine_strength(row, "put")
-                    state["position"] = "put"
-                    signal = f"📉 主跌浪 Put 入场（{strength}，趋势：{trend_label}）"
+    log_file = "signal_log_backtest.csv"
+    rows = []
+    for ts, signal in signals:
+        print(f"[{ts}] {signal}")
+        rows.append({"time": ts, "signal": signal})
+    pd.DataFrame(rows).to_csv(log_file, index=False)
+    print(f"[✅ 保存完成] 写入 {log_file} 共 {len(rows)} 条信号")
 
-            if signal:
-                print(f"[{time_est.strftime('%Y-%m-%d %H:%M:%S')}] {signal}")
-                save_last_signal(state)
-
-        print("[✅ 回测结束] 全部信号已打印完成")
-
-    except Exception as e:
-        print(f"[❌ 回测失败] {e}")
-
-if __name__ == "__main__":
-    main()
-
+if __name__ == '__main__':
+    print(f"[🔁 回测开始] {get_est_now()}")
+    backtest()
