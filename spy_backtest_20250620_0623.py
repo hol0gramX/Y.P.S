@@ -34,7 +34,6 @@ def fetch_data(start_date, end_date):
     df["MACDs"] = df["MACDs_12_26_9"]
     df["BBU"] = df["BBU_20_2.0"]
     df["BBL"] = df["BBL_20_2.0"]
-    df["Vol_MA5"] = df["Volume"].rolling(5).mean()  # ✅ 新增
     df = df.dropna()
     return df
 
@@ -48,25 +47,20 @@ def is_market_day(ts):
     cal = nasdaq.schedule(start_date=ts.date(), end_date=ts.date())
     return not cal.empty
 
-def strong_volume(row):  # ✅ 新增
-    return row["Volume"] >= row["Vol_MA5"]
-
-def allow_bottom_rebound_call(row, prev):  # ✅ 加了 strong_volume
+def allow_bottom_rebound_call(row, prev):
     return (
         row['Close'] < row['BBL'] and
         row['RSI'] > prev['RSI'] and
         row['MACDh'] > prev['MACDh'] and
-        row['MACD'] > -0.3 and
-        strong_volume(row)
+        row['MACD'] > -0.3
     )
 
-def allow_top_rebound_put(row, prev):  # ✅ 加了 strong_volume
+def allow_top_rebound_put(row, prev):
     return (
         row['Close'] > row['BBU'] and
         row['RSI'] < prev['RSI'] and
         row['MACDh'] < prev['MACDh'] and
-        row['MACD'] < 0.3 and
-        strong_volume(row)
+        row['MACD'] < 0.3
     )
 
 def allow_bollinger_rebound(row, prev_row, direction):
@@ -122,7 +116,7 @@ def generate_signals(df):
             signals.append(f"[{tstr}] ⚠️ Call 出场信号（趋势：转弱）")
             in_position = None
             last_signal_time = row.name
-            if (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and strong_volume(row)) or allow_top_rebound_put(row, prev):
+            if (rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0) or allow_top_rebound_put(row, prev):
                 signals.append(f"[{tstr}] 📉 反手 Put：Call 结构破坏 + Put 入场（{strength}）")
                 in_position = "PUT"
                 last_signal_time = row.name
@@ -132,7 +126,7 @@ def generate_signals(df):
             signals.append(f"[{tstr}] ⚠️ Put 出场信号（趋势：转弱）")
             in_position = None
             last_signal_time = row.name
-            if (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and strong_volume(row)) or allow_bottom_rebound_call(row, prev):
+            if (rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0) or allow_bottom_rebound_call(row, prev):
                 signals.append(f"[{tstr}] 📈 反手 Call：Put 结构破坏 + Call 入场（{strength}）")
                 in_position = "CALL"
                 last_signal_time = row.name
@@ -140,11 +134,11 @@ def generate_signals(df):
 
         # 入场
         if in_position is None:
-            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0 and strong_volume(row):  # ✅ 加了成交量判断
+            if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
                 signals.append(f"[{tstr}] 📈 主升浪 Call 入场（{strength}）")
                 in_position = "CALL"
                 last_signal_time = row.name
-            elif rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0 and strong_volume(row):  # ✅ 加了成交量判断
+            elif rsi < 47 and slope < -0.15 and macd < 0 and macdh < 0:
                 signals.append(f"[{tstr}] 📉 主跌浪 Put 入场（{strength}）")
                 in_position = "PUT"
                 last_signal_time = row.name
@@ -172,5 +166,6 @@ def backtest(start_date_str="2025-06-20", end_date_str="2025-06-27"):
 # ========= 执行 =========
 if __name__ == "__main__":
     backtest("2025-06-20", "2025-06-27")
+
 
 
