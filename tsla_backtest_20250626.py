@@ -49,14 +49,26 @@ def fetch_data(start_date, end_date):
     else:
         df.index = df.index.tz_convert(EST)
     df = df[~df.index.duplicated(keep='last')]
-    df.ta.rsi(length=14, append=True)
-    macd = df.ta.macd(fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd], axis=1)
+
+    # 计算技术指标
+    df.ta.rsi(length=14, append=True)  # 计算 RSI
+    macd = df.ta.macd(fast=12, slow=26, signal=9)  # 计算 MACD
+    bbands = df.ta.bbands(length=20)  # 计算布林带
+    df = pd.concat([df, macd, bbands], axis=1)
+
+    # 重命名列
     df["RSI"] = df["RSI_14"]
     df["MACD"] = df["MACD_12_26_9"]
     df["MACDh"] = df["MACDh_12_26_9"]
     df["MACDs"] = df["MACDs_12_26_9"]
+    df["BBU"] = df["BBU_20_2.0"]
+    df["BBL"] = df["BBL_20_2.0"]
     df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
+
+    # 计算 RSI 的变化率（RSI SLOPE）
+    df['RSI_SLOPE'] = df['RSI'].diff(3)  # 计算 3 个周期内的变化
+
+    # 清除空值和不需要的列
     df = df.dropna()
     df = df[df[["VWAP", "MACD", "MACDh", "RSI"]].notna().all(axis=1)]
     return df
