@@ -36,6 +36,7 @@ def fetch_data(start_date, end_date):
     df["BBL"] = df["BBL_20_2.0"]
     df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
     df = df.dropna()
+    df = df[df[["VWAP", "MACD", "MACDh", "RSI"]].notna().all(axis=1)]
     return df
 
 # ========= 工具函数 =========
