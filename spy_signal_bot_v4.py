@@ -69,10 +69,10 @@ def compute_rsi(s, length=14):
     return (100 - 100 / (1 + rs)).fillna(50)
 
 def compute_macd(df):
-    macd = ta.macd(df['Close'])
-    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
+    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
 # ========== 数据拉取 ==========
