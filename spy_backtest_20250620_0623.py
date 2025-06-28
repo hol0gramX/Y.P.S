@@ -115,7 +115,8 @@ def heikin_ashi_warning(df):
     previous = candles.iloc[-2]
     
     # 添加调试输出，查看计算结果
-    print(f"Body Ratio: {body_ratio.iloc[-1]}, HA_Close: {latest['HA_Close']}, Previous HA_Close: {previous['HA_Close']}")
+    if body_ratio.iloc[-1] < 0.25:
+        print(f"Body Ratio: {body_ratio.iloc[-1]}, HA_Close: {latest['HA_Close']}, Previous HA_Close: {previous['HA_Close']}")
 
     if body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] < previous['HA_Close']:
         return f"🔻 Heikin-Ashi 衰竭顶部（动能减弱）"
