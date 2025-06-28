@@ -162,7 +162,16 @@ def allow_put_reentry(row, prev):
 
 # ========== 信号判断主逻辑 ==========
 def generate_signal(df):
-    if len(df) < 6: return None, None
+    if df.empty:
+        print("[错误] 数据为空，无法判断信号")
+        return None, None
+    if 'MACD' not in df.columns or df['MACD'].isnull().all():
+        print("[错误] MACD计算失败，数据不完整")
+        return None, None
+    if len(df) < 6:
+        # 数据条数太少，暂不判断信号，安全退出
+        return None, None
+
     row = df.iloc[-1]
     prev = df.iloc[-2]
     state = load_last_signal()
