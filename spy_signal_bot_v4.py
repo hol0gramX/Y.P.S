@@ -68,6 +68,8 @@ def get_data():
     now = get_est_now()
     if now.date() > last_trade_day:
         end_dt = pd.Timestamp.combine(now.date(), time(9, 31), tzinfo=EST)
+    
+    # 获取数据
     df = yf.download(
         SYMBOL,
         interval="1m",
@@ -77,6 +79,7 @@ def get_data():
         prepost=True,
         auto_adjust=True
     )
+    
     if df.empty:
         raise ValueError("数据为空")
     if isinstance(df.columns, pd.MultiIndex):
@@ -84,8 +87,11 @@ def get_data():
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df = df[df["Volume"] > 0]
     df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+    
+    # 丢弃空数据段
     mask = (df.index >= start_dt) & (df.index <= end_dt)
     df = df[mask]
+
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
     df = compute_macd(df)
@@ -101,20 +107,6 @@ def get_data():
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
     return df
 
-def compute_rsi(s, length=14):
-    delta = s.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    rs = up.rolling(length).mean() / down.rolling(length).mean()
-    return (100 - 100 / (1 + rs)).fillna(50)
-
-def compute_macd(df):
-    macd = ta.macd(df['Close'])
-    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
-    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
-    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
-    return df# 
-    
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -301,5 +293,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
