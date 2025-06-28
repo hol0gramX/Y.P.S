@@ -105,30 +105,6 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-# ========== HA动能衰竭检测 ==========
-def heikin_ashi_warning(df):
-    ha = df[['Open', 'High', 'Low', 'Close']].copy()
-    ha['HA_Close'] = (ha['Open'] + ha['High'] + ha['Low'] + ha['Close']) / 4
-    ha['HA_Open'] = ha['Open']
-    for i in range(1, len(ha)):
-        ha.iloc[i, ha.columns.get_loc('HA_Open')] = (ha.iloc[i-1]['HA_Open'] + ha.iloc[i-1]['HA_Close']) / 2
-    ha['HA_High'] = ha[['HA_Open', 'HA_Close', 'High']].max(axis=1)
-    ha['HA_Low'] = ha[['HA_Open', 'HA_Close', 'Low']].min(axis=1)
-
-    candles = ha.iloc[-4:]
-    bodies = abs(candles['HA_Close'] - candles['HA_Open'])
-    full_ranges = candles['HA_High'] - candles['HA_Low']
-    body_ratio = bodies / full_ranges
-
-    latest = candles.iloc[-1]
-    previous = candles.iloc[-2]
-
-    if body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] < previous['HA_Close']:
-        return f"🔻 Heikin-Ashi 衰竭顶部（动能减弱）"
-    elif body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] > previous['HA_Close']:
-        return f"🔺 Heikin-Ashi 反弹底部（动能减弱）"
-    return None
-
 # ========== 数据拉取 ==========
 def get_data():
     sessions = get_market_sessions(get_est_now().date())
@@ -209,16 +185,6 @@ def generate_signal(df):
     pos = state.get("position", "none")
     now_time = row.name
 
-    ha_warn = heikin_ashi_warning(df)
-    
-    # 根据当前仓位判断对应的动能衰竭警示
-    if ha_warn:
-        if pos == "call" and "顶部" in ha_warn:  # 如果有call并且是顶部衰竭
-            send_to_discord(f"[{now_time.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⚠️ 当前持仓为Call，{ha_warn}")
-        elif pos == "put" and "底部" in ha_warn:  # 如果有put并且是底部反弹
-            send_to_discord(f"[{now_time.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⚠️ 当前持仓为Put，{ha_warn}")
-    
-    # 继续执行原有的信号生成逻辑
     if pos == "call" and check_call_exit(row):
         strength = determine_strength(row, "call")
         state["position"] = "none"
@@ -241,8 +207,37 @@ def generate_signal(df):
             return now_time, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）"
         return now_time, f"⚠️ Put 出场信号（{strength}）"
 
-    # 处理空仓入场信号等
-    # ...
+    elif pos == "none":
+        if check_call_entry(row):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return now_time, f"📈 主升浪 Call 入场（{strength}）"
+        elif check_put_entry(row):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return now_time, f"📉 主跌浪 Put 入场（{strength}）"
+        elif allow_bottom_rebound_call(row, prev):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return now_time, f"📈 底部反弹 Call 捕捉（{strength}）"
+        elif allow_top_rebound_put(row, prev):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return now_time, f"📉 顶部反转 Put 捕捉（{strength}）"
+        elif allow_call_reentry(row, prev):
+            strength = determine_strength(row, "call")
+            state["position"] = "call"
+            save_last_signal(state)
+            return now_time, f"📈 趋势回补 Call 再入场（{strength}）"
+        elif allow_put_reentry(row, prev):
+            strength = determine_strength(row, "put")
+            state["position"] = "put"
+            save_last_signal(state)
+            return now_time, f"📉 趋势回补 Put 再入场（{strength}）"
 
     return None, None
 
@@ -253,6 +248,7 @@ def send_to_discord(message):
         return
     requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
+# ========== 日志（禁用写入 CSV） ==========
 def log_signal_to_csv(timestamp, signal):
     pass  # 🚫 已取消记录 CSV
 
@@ -276,11 +272,11 @@ def main():
 
         df = get_data()
         time_signal, signal = generate_signal(df)
-
         if signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
+            # log_signal_to_csv(time_signal, signal)  # ❌ 不记录日志
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
 
@@ -289,4 +285,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
