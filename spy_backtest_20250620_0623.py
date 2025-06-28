@@ -49,52 +49,29 @@ def is_market_day(ts):
     cal = nasdaq.schedule(start_date=ts.date(), end_date=ts.date())
     return not cal.empty
 
-def allow_bottom_rebound_call(row, prev):
-    return (
-        row['Close'] < row['BBL'] and
-        row['RSI'] > prev['RSI'] and
-        row['MACDh'] > prev['MACDh'] and
-        row['MACD'] > -0.3
-    )
+# Heikin-Ashi 动能衰竭检测
+def heikin_ashi_warning(df):
+    ha = df[['Open', 'High', 'Low', 'Close']].copy()
+    ha['HA_Close'] = (ha['Open'] + ha['High'] + ha['Low'] + ha['Close']) / 4
+    ha['HA_Open'] = ha['Open']
+    for i in range(1, len(ha)):
+        ha.iloc[i, ha.columns.get_loc('HA_Open')] = (ha.iloc[i-1]['HA_Open'] + ha.iloc[i-1]['HA_Close']) / 2
+    ha['HA_High'] = ha[['HA_Open', 'HA_Close', 'High']].max(axis=1)
+    ha['HA_Low'] = ha[['HA_Open', 'HA_Close', 'Low']].min(axis=1)
 
-def allow_top_rebound_put(row, prev):
-    return (
-        row['Close'] > row['BBU'] and
-        row['RSI'] < prev['RSI'] and
-        row['MACDh'] < prev['MACDh'] and
-        row['MACD'] < 0.3
-    )
+    candles = ha.iloc[-4:]
+    bodies = abs(candles['HA_Close'] - candles['HA_Open'])
+    full_ranges = candles['HA_High'] - candles['HA_Low']
+    body_ratio = bodies / full_ranges
 
-def allow_bollinger_rebound(row, prev_row, direction):
-    if direction == "CALL":
-        return (
-            prev_row["Close"] < prev_row["BBL"] and
-            row["Close"] > row["BBL"] and
-            row["RSI"] > 48 and row["MACD"] > 0
-        )
-    elif direction == "PUT":
-        return (
-            prev_row["Close"] > prev_row["BBU"] and
-            row["Close"] < row["BBU"] and
-            row["RSI"] < 52 and row["MACD"] < 0
-        )
-    return False
+    latest = candles.iloc[-1]
+    previous = candles.iloc[-2]
 
-def allow_call_reentry(row, prev):
-    return (
-        prev["Close"] < prev["VWAP"] and
-        row["Close"] > row["VWAP"] and
-        row["RSI"] > 53 and
-        row["MACDh"] > 0.1
-    )
-
-def allow_put_reentry(row, prev):
-    return (
-        prev["Close"] > prev["VWAP"] and
-        row["Close"] < row["VWAP"] and
-        row["RSI"] < 47 and
-        row["MACDh"] < 0.05
-    )
+    if body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] < previous['HA_Close']:
+        return f"🔻 Heikin-Ashi 衰竭顶部（动能减弱）"
+    elif body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] > previous['HA_Close']:
+        return f"🔺 Heikin-Ashi 反弹底部（动能减弱）"
+    return None
 
 # ========= 信号生成 =========
 def generate_signals(df):
@@ -198,6 +175,7 @@ def backtest(start_date_str="2025-06-20", end_date_str="2025-06-27"):
 # ========= 执行 =========
 if __name__ == "__main__":
     backtest("2025-06-20", "2025-06-27")
+
 
 
 
