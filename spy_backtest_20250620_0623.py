@@ -129,7 +129,7 @@ def generate_signals(df):
         strength = "强" if abs(slope) > 0.25 else "中" if abs(slope) > 0.15 else "弱"
 
         # 出场 + 反手
-        if in_position == "CALL" and rsi < 50 and slope < 0 and macd < 0:
+        if in_position == "CALL" and rsi < 50 and slope < 0 and macd < 0.05 and macdh < 0.05:
             signals.append(f"[{tstr}] ⚠️ Call 出场信号（趋势：转弱）")
             in_position = None
             last_signal_time = row.name
@@ -139,7 +139,7 @@ def generate_signals(df):
                 last_signal_time = row.name
             continue
 
-        elif in_position == "PUT" and rsi > 50 and slope > 0 and macd > 0:
+        elif in_position == "PUT" and rsi > 50 and slope > 0 and macd > -0.05 and macdh > -0.05:
             signals.append(f"[{tstr}] ⚠️ Put 出场信号（趋势：转弱）")
             in_position = None
             last_signal_time = row.name
