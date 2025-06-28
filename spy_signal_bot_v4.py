@@ -1,4 +1,3 @@
-# ========== 引入库 ==========
 import os
 import json
 import requests
@@ -8,8 +7,6 @@ from zoneinfo import ZoneInfo
 import yfinance as yf
 import pandas_ta as ta
 import pandas_market_calendars as mcal
-import csv
-from pathlib import Path
 
 # ========== 全局配置 ==========
 GIST_ID = "7490de39ccc4e20445ef576832bea34b"
@@ -44,18 +41,6 @@ load_last_signal = load_last_signal_from_gist
 def get_est_now():
     return datetime.now(tz=EST)
 
-def get_market_sessions(today):
-    trade_days = nasdaq.valid_days(start_date=today - timedelta(days=3), end_date=today)
-    recent = trade_days[-1:]
-    sch = nasdaq.schedule(start_date=recent[0], end_date=recent[0])
-    sessions = []
-    for ts in sch.itertuples():
-        op = ts.market_open.tz_convert(EST)
-        cl = ts.market_close.tz_convert(EST)
-        early = cl < pd.Timestamp.combine(ts.Index.date(), time(16)).tz_localize(EST)
-        sessions.append((op, cl, early))
-    return sessions
-
 def is_market_open_now():
     now = get_est_now()
     sch = nasdaq.schedule(start_date=now.date(), end_date=now.date())
@@ -66,29 +51,15 @@ def is_market_open_now():
     return market_open <= now <= market_close
 
 # ========== 强制清仓机制 ==========
-def force_clear_at_open():
+def force_clear_at_close():
     now = get_est_now()
-    if time(9, 30) <= now.time() <= time(9, 31):
+    # 15:59 清仓
+    if now.time().hour == 15 and now.time().minute == 59:
         state = load_last_signal()
         if state.get("position", "none") != "none":
             state["position"] = "none"
             save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏱️ 开盘强制清仓（状态归零）")
-
-def check_market_closed_and_clear():
-    now = get_est_now()
-    sch = nasdaq.schedule(start_date=now.date(), end_date=now.date())
-    if sch.empty:
-        return False
-    close_time = sch.iloc[0]['market_close'].tz_convert(EST)
-    if now > close_time + timedelta(minutes=1):
-        state = load_last_signal()
-        if state.get("position", "none") != "none":
-            state["position"] = "none"
-            save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⛔️ 收盘后自动清仓（状态归零）")
-        return True
-    return False
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏰ 15:59 自动清仓（状态归零）")
 
 # ========== 技术指标 ==========
 def compute_rsi(s, length=14):
@@ -137,10 +108,8 @@ def get_data():
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 确保只保留当日4点及以后，且小于当前时刻的k线，避免未来数据污染
     df = df[(df.index >= start_time) & (df.index < now)]
 
-    # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
@@ -264,23 +233,18 @@ def send_to_discord(message):
         return
     requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# ========== 日志（禁用写入 CSV） ==========
-def log_signal_to_csv(timestamp, signal):
-    pass  # 🚫 已取消记录 CSV
-
 # ========== 主函数 ==========
 def main():
     try:
         now = get_est_now()
         print("=" * 60)
         print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        force_clear_at_open()
+        
+        force_clear_at_close()
+        
         state = load_last_signal()
         print(f"📦 当前仓位状态：{state.get('position', 'none')}")
         print("-" * 60)
-
-        if check_market_closed_and_clear():
-            return
 
         if not is_market_open_now():
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕗 盘前/盘后，不进行信号判断")
@@ -292,7 +256,6 @@ def main():
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
-            # log_signal_to_csv(time_signal, signal)  # ❌ 不记录日志
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
 
@@ -301,3 +264,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
