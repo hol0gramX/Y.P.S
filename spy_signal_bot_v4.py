@@ -53,8 +53,7 @@ def is_market_open_now():
 # ========== 强制清仓机制 ==========
 def force_clear_at_close():
     now = get_est_now()
-    # 15:59 清仓
-    if now.time().hour == 15 and now.time().minute == 59:
+    if time(15, 59) <= now.time() < time(16, 0):
         state = load_last_signal()
         if state.get("position", "none") != "none":
             state["position"] = "none"
