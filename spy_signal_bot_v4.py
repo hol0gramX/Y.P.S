@@ -19,7 +19,6 @@ EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 LOG_FILE = "signal_log.csv"
 
-# --------- 日志 ---------
 def log_signal_to_csv(timestamp, signal):
     date_str = timestamp.strftime("%Y-%m-%d")
     file_name = f"signal_log_{date_str}.csv"
@@ -30,7 +29,6 @@ def log_signal_to_csv(timestamp, signal):
             writer.writerow(["timestamp", "signal"])
         writer.writerow([timestamp.isoformat(), signal])
 
-# --------- Gist 状态管理 ---------
 def load_last_signal_from_gist():
     if not GIST_TOKEN:
         return {"position": "none"}
@@ -50,11 +48,9 @@ def save_last_signal(state):
 
 load_last_signal = load_last_signal_from_gist
 
-# --------- 时间工具 ---------
 def get_est_now():
     return datetime.now(tz=EST)
 
-# --------- 获取数据 ---------
 def get_data():
     today = get_est_now().date()
     trade_days = nasdaq.valid_days(start_date=today - timedelta(days=10), end_date=today)
@@ -92,14 +88,33 @@ def get_data():
     df = df[mask]
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
-    df['RSI_SLOPE'] = df['RSI'].diff(3)
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
+
+    today_4am = pd.Timestamp.combine(now.date(), time(4, 0), tzinfo=EST)
+    intraday_df = df[df.index >= today_4am].copy()
+    intraday_df['RSI_SLOPE'] = intraday_df['RSI'].diff(3)
+    intraday_df['VWAP'] = (intraday_df['Close'] * intraday_df['Volume']).cumsum() / intraday_df['Volume'].cumsum()
+    df.loc[intraday_df.index, 'RSI_SLOPE'] = intraday_df['RSI_SLOPE']
+    df.loc[intraday_df.index, 'VWAP'] = intraday_df['VWAP']
+
     df.ffill(inplace=True)
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
     return df
 
-# --------- 技术指标 ---------
+def compute_rsi(s, length=14):
+    delta = s.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    rs = up.rolling(length).mean() / down.rolling(length).mean()
+    return (100 - 100 / (1 + rs)).fillna(50)
+
+def compute_macd(df):
+    macd = ta.macd(df['Close'])
+    df['MACD'] = macd['MACD_12_26_9'].fillna(0)
+    df['MACDs'] = macd['MACDs_12_26_9'].fillna(0)
+    df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
+    return df# 
+    
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -236,6 +251,16 @@ def generate_signal(df):
 
     return None, None
 
+# --------- 市场状态判断 ---------
+def is_market_open_now():
+    now = get_est_now()
+    schedule = nasdaq.schedule(start_date=now.date(), end_date=now.date())
+    if schedule.empty:
+        return False
+    open_time = schedule.iloc[0]['market_open'].tz_convert(EST)
+    close_time = schedule.iloc[0]['market_close'].tz_convert(EST)
+    return open_time <= now <= close_time
+
 # --------- 通知 ---------
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
@@ -276,4 +301,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
