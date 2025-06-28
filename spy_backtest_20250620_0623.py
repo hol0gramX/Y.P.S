@@ -34,6 +34,7 @@ def fetch_data(start_date, end_date):
     df["MACDs"] = df["MACDs_12_26_9"]
     df["BBU"] = df["BBU_20_2.0"]
     df["BBL"] = df["BBL_20_2.0"]
+    df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()  # ✅ 主策略逻辑用
     df = df.dropna()
     return df
 
@@ -77,6 +78,22 @@ def allow_bollinger_rebound(row, prev_row, direction):
             row["RSI"] < 52 and row["MACD"] < 0
         )
     return False
+
+def allow_call_reentry(row, prev):
+    return (
+        prev["Close"] < prev["VWAP"] and
+        row["Close"] > row["VWAP"] and
+        row["RSI"] > 53 and
+        row["MACDh"] > 0.1
+    )
+
+def allow_put_reentry(row, prev):
+    return (
+        prev["Close"] > prev["VWAP"] and
+        row["Close"] < row["VWAP"] and
+        row["RSI"] < 47 and
+        row["MACDh"] < 0.05
+    )
 
 # ========= 信号生成 =========
 def generate_signals(df):
@@ -132,7 +149,7 @@ def generate_signals(df):
                 last_signal_time = row.name
             continue
 
-        # 入场（空仓状态）
+        # 入场（含 reentry）
         if in_position is None:
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
                 signals.append(f"[{tstr}] 📈 主升浪 Call 入场（{strength}）")
@@ -143,19 +160,19 @@ def generate_signals(df):
                 in_position = "PUT"
                 last_signal_time = row.name
             elif allow_bottom_rebound_call(row, prev) or allow_bollinger_rebound(row, prev, "CALL"):
-                signals.append(f"[{tstr}] 📉 底部反弹 Call 捕捉（评分：4/5）")
+                signals.append(f"[{tstr}] 📈 底部反弹 Call 捕捉（评分：4/5）")
                 in_position = "CALL"
                 last_signal_time = row.name
             elif allow_top_rebound_put(row, prev) or allow_bollinger_rebound(row, prev, "PUT"):
-                signals.append(f"[{tstr}] 📈 顶部反转 Put 捕捉（评分：3/5）")
+                signals.append(f"[{tstr}] 📉 顶部反转 Put 捕捉（评分：3/5）")
                 in_position = "PUT"
                 last_signal_time = row.name
-            elif prev["Close"] < prev["VWAP"] and row["Close"] > row["VWAP"] and row["RSI"] > 53 and row["MACDh"] > 0.1:
-                signals.append(f"[{tstr}] 📈 趋势回补 Call 再入场（强度：{strength}）")
+            elif allow_call_reentry(row, prev):
+                signals.append(f"[{tstr}] 📈 趋势回补 Call 再入场（{strength}）")
                 in_position = "CALL"
                 last_signal_time = row.name
-            elif prev["Close"] > prev["VWAP"] and row["Close"] < row["VWAP"] and row["RSI"] < 47 and row["MACDh"] < 0.05:
-                signals.append(f"[{tstr}] 📉 趋势回补 Put 再入场（强度：{strength}）")
+            elif allow_put_reentry(row, prev):
+                signals.append(f"[{tstr}] 📉 趋势回补 Put 再入场（{strength}）")
                 in_position = "PUT"
                 last_signal_time = row.name
 
