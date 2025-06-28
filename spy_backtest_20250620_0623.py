@@ -96,36 +96,6 @@ def allow_put_reentry(row, prev):
         row["MACDh"] < 0.05
     )
 
-# ========= Heikin-Ashi 动能衰竭检测 ========= 
-def heikin_ashi_warning(df):
-    ha = df[['Open', 'High', 'Low', 'Close']].copy()
-    ha['HA_Close'] = (ha['Open'] + ha['High'] + ha['Low'] + ha['Close']) / 4
-    ha['HA_Open'] = ha['Open']
-    for i in range(1, len(ha)):
-        ha.iloc[i, ha.columns.get_loc('HA_Open')] = (ha.iloc[i-1]['HA_Open'] + ha.iloc[i-1]['HA_Close']) / 2
-    ha['HA_High'] = ha[['HA_Open', 'HA_Close', 'High']].max(axis=1)
-    ha['HA_Low'] = ha[['HA_Open', 'HA_Close', 'Low']].min(axis=1)
-
-    candles = ha.iloc[-4:]
-    bodies = abs(candles['HA_Close'] - candles['HA_Open'])
-    full_ranges = candles['HA_High'] - candles['HA_Low']
-    body_ratio = bodies / full_ranges
-
-    latest = candles.iloc[-1]
-    previous = candles.iloc[-2]
-
-    # 调试输出：查看 Full Range 和 Body Ratio 的计算
-    print(f"Debug - Full Range: {full_ranges.iloc[-1]}, Body: {bodies.iloc[-1]}")
-    print(f"Debug - HA_Close: {latest['HA_Close']}, HA_Open: {latest['HA_Open']}, Body Ratio: {body_ratio.iloc[-1]}")
-    print(f"Debug - Previous HA_Close: {previous['HA_Close']}, Previous HA_Open: {previous['HA_Open']}")
-
-    if body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] < previous['HA_Close']:
-        return f"🔻 Heikin-Ashi 衰竭顶部（动能减弱）"
-    elif body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] > previous['HA_Close']:
-        return f"🔺 Heikin-Ashi 反弹底部（动能减弱）"
-    
-    return None
-
 # ========= 信号生成 =========
 def generate_signals(df):
     signals = []
@@ -187,11 +157,6 @@ def generate_signals(df):
                 last_signal_time = row.name
             continue
 
-        # 检查 Heikin-Ashi 动能衰竭
-        ha_warn = heikin_ashi_warning(df.iloc[i-4:i])
-        if ha_warn:
-            signals.append(f"[{tstr}] {ha_warn}")
-
         if in_position is None:
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
                 signals.append(f"[{tstr}] 📈 主升浪 Call 入场（{strength}）")
@@ -221,7 +186,7 @@ def generate_signals(df):
     return signals
 
 # ========= 回溯入口 =========
-def backtest(start_date_str="2025-06-26", end_date_str="2025-06-27"):
+def backtest(start_date_str="2025-06-20", end_date_str="2025-06-27"):
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
     print(f"[🔁 回溯开始] {start_date} ~ {end_date}")
@@ -233,5 +198,8 @@ def backtest(start_date_str="2025-06-26", end_date_str="2025-06-27"):
 # ========= 执行 =========
 if __name__ == "__main__":
     backtest("2025-06-26", "2025-06-27")
+
+
+
 
 
