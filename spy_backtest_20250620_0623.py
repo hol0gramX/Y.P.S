@@ -49,53 +49,6 @@ def is_market_day(ts):
     cal = nasdaq.schedule(start_date=ts.date(), end_date=ts.date())
     return not cal.empty
 
-def allow_bottom_rebound_call(row, prev):
-    return (
-        row['Close'] < row['BBL'] and
-        row['RSI'] > prev['RSI'] and
-        row['MACDh'] > prev['MACDh'] and
-        row['MACD'] > -0.3
-    )
-
-def allow_top_rebound_put(row, prev):
-    return (
-        row['Close'] > row['BBU'] and
-        row['RSI'] < prev['RSI'] and
-        row['MACDh'] < prev['MACDh'] and
-        row['MACD'] < 0.3
-    )
-
-def allow_bollinger_rebound(row, prev_row, direction):
-    if direction == "CALL":
-        return (
-            prev_row["Close"] < prev_row["BBL"] and
-            row["Close"] > row["BBL"] and
-            row["RSI"] > 48 and row["MACD"] > 0
-        )
-    elif direction == "PUT":
-        return (
-            prev_row["Close"] > prev_row["BBU"] and
-            row["Close"] < row["BBU"] and
-            row["RSI"] < 52 and row["MACD"] < 0
-        )
-    return False
-
-def allow_call_reentry(row, prev):
-    return (
-        prev["Close"] < prev["VWAP"] and
-        row["Close"] > row["VWAP"] and
-        row["RSI"] > 53 and
-        row["MACDh"] > 0.1
-    )
-
-def allow_put_reentry(row, prev):
-    return (
-        prev["Close"] > prev["VWAP"] and
-        row["Close"] < row["VWAP"] and
-        row["RSI"] < 47 and
-        row["MACDh"] < 0.05
-    )
-
 # ========= Heikin-Ashi 动能衰竭检测 ========= 
 def heikin_ashi_warning(df):
     ha = df[['Open', 'High', 'Low', 'Close']].copy()
@@ -113,15 +66,17 @@ def heikin_ashi_warning(df):
 
     latest = candles.iloc[-1]
     previous = candles.iloc[-2]
-    
-    # 添加调试输出，查看计算结果
-    if body_ratio.iloc[-1] < 0.25:
-        print(f"Body Ratio: {body_ratio.iloc[-1]}, HA_Close: {latest['HA_Close']}, Previous HA_Close: {previous['HA_Close']}")
+
+    # 调试输出
+    print(f"Debug - Full Range: {full_ranges.iloc[-1]}, Body: {bodies.iloc[-1]}")
+    print(f"Debug - HA_Close: {latest['HA_Close']}, HA_Open: {latest['HA_Open']}, Body Ratio: {body_ratio.iloc[-1]}")
+    print(f"Debug - Previous HA_Close: {previous['HA_Close']}, Previous HA_Open: {previous['HA_Open']}")
 
     if body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] < previous['HA_Close']:
         return f"🔻 Heikin-Ashi 衰竭顶部（动能减弱）"
     elif body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] > previous['HA_Close']:
         return f"🔺 Heikin-Ashi 反弹底部（动能减弱）"
+    
     return None
 
 # ========= 信号生成 =========
@@ -184,6 +139,11 @@ def generate_signals(df):
                 in_position = "CALL"
                 last_signal_time = row.name
             continue
+
+        # 检查 Heikin-Ashi 动能衰竭
+        ha_warn = heikin_ashi_warning(df.iloc[i-4:i])
+        if ha_warn:
+            signals.append(f"[{tstr}] {ha_warn}")
 
         if in_position is None:
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
