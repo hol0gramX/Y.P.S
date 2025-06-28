@@ -132,7 +132,7 @@ def generate_signals(df):
                 last_signal_time = row.name
             continue
 
-        # 入场
+        # 入场（空仓状态）
         if in_position is None:
             if rsi > 53 and slope > 0.15 and macd > 0 and macdh > 0:
                 signals.append(f"[{tstr}] 📈 主升浪 Call 入场（{strength}）")
@@ -148,6 +148,14 @@ def generate_signals(df):
                 last_signal_time = row.name
             elif allow_top_rebound_put(row, prev) or allow_bollinger_rebound(row, prev, "PUT"):
                 signals.append(f"[{tstr}] 📈 顶部反转 Put 捕捉（评分：3/5）")
+                in_position = "PUT"
+                last_signal_time = row.name
+            elif prev["Close"] < prev["VWAP"] and row["Close"] > row["VWAP"] and row["RSI"] > 53 and row["MACDh"] > 0.1:
+                signals.append(f"[{tstr}] 📈 趋势回补 Call 再入场（强度：{strength}）")
+                in_position = "CALL"
+                last_signal_time = row.name
+            elif prev["Close"] > prev["VWAP"] and row["Close"] < row["VWAP"] and row["RSI"] < 47 and row["MACDh"] < 0.05:
+                signals.append(f"[{tstr}] 📉 趋势回补 Put 再入场（强度：{strength}）")
                 in_position = "PUT"
                 last_signal_time = row.name
 
