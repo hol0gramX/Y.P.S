@@ -192,7 +192,7 @@ def generate_signals(df):
     return signals
 
 # ========= 回溯入口 =========
-def backtest(start_date_str="2025-06-20", end_date_str="2025-06-27"):
+def backtest(start_date_str="2025-06-26", end_date_str="2025-06-27"):
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
     print(f"[🔁 回溯开始] {start_date} ~ {end_date}")
