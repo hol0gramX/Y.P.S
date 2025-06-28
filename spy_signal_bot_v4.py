@@ -107,25 +107,40 @@ def compute_macd(df):
 
 # ========== 数据拉取 ==========
 def get_data():
-    sessions = get_market_sessions(get_est_now().date())
-    start_dt = sessions[0][0] - timedelta(hours=5)
-    end_dt = sessions[0][1] + timedelta(hours=2)
+    now = get_est_now()
+    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
+
+    start_utc = start_time.astimezone(ZoneInfo("UTC"))
+    end_utc = now.astimezone(ZoneInfo("UTC"))
+
     df = yf.download(
         SYMBOL,
         interval="1m",
-        start=start_dt.tz_convert("UTC"),
-        end=end_dt.tz_convert("UTC"),
+        start=start_utc,
+        end=end_utc,
         progress=False,
         prepost=True,
         auto_adjust=True
     )
+
     if df.empty:
         raise ValueError("数据为空")
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
+
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df = df[df["Volume"] > 0]
-    df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
+
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
+
+    # 确保只保留当日4点及以后，且小于当前时刻的k线，避免未来数据污染
+    df = df[(df.index >= start_time) & (df.index < now)]
+
+    # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
@@ -133,6 +148,7 @@ def get_data():
     df = compute_macd(df)
     df.ffill(inplace=True)
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
+
     return df
 
 # ========== 信号判断函数 ==========
