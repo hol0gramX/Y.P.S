@@ -1,4 +1,4 @@
-# ========== 引入库 ==========
+# ========== 引入库 ========== 
 import os
 import json
 import requests
@@ -11,7 +11,7 @@ import pandas_market_calendars as mcal
 import csv
 from pathlib import Path
 
-# ========== 全局配置 ==========
+# ========== 全局配置 ========== 
 GIST_ID = "7490de39ccc4e20445ef576832bea34b"
 GIST_FILENAME = "last_signal.json"
 GIST_TOKEN = os.environ.get("GIST_TOKEN")
@@ -20,7 +20,7 @@ SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
 
-# ========== Gist 状态管理 ==========
+# ========== Gist 状态管理 ========== 
 def load_last_signal_from_gist():
     if not GIST_TOKEN:
         return {"position": "none"}
@@ -40,7 +40,7 @@ def save_last_signal(state):
 
 load_last_signal = load_last_signal_from_gist
 
-# ========== 时间工具 ==========
+# ========== 时间工具 ========== 
 def get_est_now():
     return datetime.now(tz=EST)
 
@@ -65,7 +65,7 @@ def is_market_open_now():
     market_close = sch.iloc[0]['market_close'].tz_convert(EST)
     return market_open <= now <= market_close
 
-# ========== 强制清仓机制 ==========
+# ========== 强制清仓机制 ========== 
 def force_clear_at_open():
     now = get_est_now()
     if time(9, 30) <= now.time() <= time(9, 31):
@@ -90,7 +90,7 @@ def check_market_closed_and_clear():
         return True
     return False
 
-# ========== 技术指标 ==========
+# ========== 技术指标 ========== 
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -105,7 +105,31 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_12_26_9'].fillna(0)
     return df
 
-# ========== 数据拉取 ==========
+# ========== HA动能衰竭检测 ========== 
+def heikin_ashi_warning(df):
+    ha = df[['Open', 'High', 'Low', 'Close']].copy()
+    ha['HA_Close'] = (ha['Open'] + ha['High'] + ha['Low'] + ha['Close']) / 4
+    ha['HA_Open'] = ha['Open']
+    for i in range(1, len(ha)):
+        ha.iloc[i, ha.columns.get_loc('HA_Open')] = (ha.iloc[i-1]['HA_Open'] + ha.iloc[i-1]['HA_Close']) / 2
+    ha['HA_High'] = ha[['HA_Open', 'HA_Close', 'High']].max(axis=1)
+    ha['HA_Low'] = ha[['HA_Open', 'HA_Close', 'Low']].min(axis=1)
+
+    candles = ha.iloc[-4:]
+    bodies = abs(candles['HA_Close'] - candles['HA_Open'])
+    full_ranges = candles['HA_High'] - candles['HA_Low']
+    body_ratio = bodies / full_ranges
+
+    latest = candles.iloc[-1]
+    previous = candles.iloc[-2]
+
+    if body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] < previous['HA_Close']:
+        return f"🔻 Heikin-Ashi 衰竭顶部（动能减弱）"
+    elif body_ratio.iloc[-1] < 0.25 and latest['HA_Close'] > previous['HA_Close']:
+        return f"🔺 Heikin-Ashi 反弹底部（动能减弱）"
+    return None
+
+# ========== 数据拉取 ========== 
 def get_data():
     sessions = get_market_sessions(get_est_now().date())
     start_dt = sessions[0][0] - timedelta(hours=5)
@@ -135,124 +159,16 @@ def get_data():
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
     return df
 
-# ========== 信号判断函数 ==========
-def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
-
-def determine_strength(row, direction):
-    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
-    if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
-            return "强"
-        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
-            return "弱"
-    elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
-            return "强"
-        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
-            return "弱"
-    return "中"
-
-def check_call_entry(row):
-    return row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
-
-def check_put_entry(row):
-    return row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
-
-def allow_bottom_rebound_call(row, prev):
-    return row['Close'] < row['VWAP'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3
-
-def allow_top_rebound_put(row, prev):
-    return row['Close'] > row['VWAP'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3
-
-def check_call_exit(row):
-    return row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
-
-def check_put_exit(row):
-    return row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
-
-def allow_call_reentry(row, prev):
-    return prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1
-
-def allow_put_reentry(row, prev):
-    return prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05
-
-# ========== 信号判断主逻辑 ==========
-def generate_signal(df):
-    if len(df) < 6: return None, None
-    row = df.iloc[-1]
-    prev = df.iloc[-2]
-    state = load_last_signal()
-    pos = state.get("position", "none")
-    now_time = row.name
-
-    if pos == "call" and check_call_exit(row):
-        strength = determine_strength(row, "call")
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_put_entry(row) or allow_top_rebound_put(row, prev):
-            state["position"] = "put"
-            strength_put = determine_strength(row, "put")
-            save_last_signal(state)
-            return now_time, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）"
-        return now_time, f"⚠️ Call 出场信号（{strength}）"
-
-    elif pos == "put" and check_put_exit(row):
-        strength = determine_strength(row, "put")
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_call_entry(row) or allow_bottom_rebound_call(row, prev):
-            state["position"] = "call"
-            strength_call = determine_strength(row, "call")
-            save_last_signal(state)
-            return now_time, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）"
-        return now_time, f"⚠️ Put 出场信号（{strength}）"
-
-    elif pos == "none":
-        if check_call_entry(row):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return now_time, f"📈 主升浪 Call 入场（{strength}）"
-        elif check_put_entry(row):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return now_time, f"📉 主跌浪 Put 入场（{strength}）"
-        elif allow_bottom_rebound_call(row, prev):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return now_time, f"📈 底部反弹 Call 捕捉（{strength}）"
-        elif allow_top_rebound_put(row, prev):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return now_time, f"📉 顶部反转 Put 捕捉（{strength}）"
-        elif allow_call_reentry(row, prev):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return now_time, f"📈 趋势回补 Call 再入场（{strength}）"
-        elif allow_put_reentry(row, prev):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return now_time, f"📉 趋势回补 Put 再入场（{strength}）"
-
-    return None, None
-
-# ========== 通知 ==========
+# ========== 主函数 ========== 
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
         print("[通知] DISCORD_WEBHOOK_URL 未设置")
         return
     requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
 
-# ========== 日志（禁用写入 CSV） ==========
 def log_signal_to_csv(timestamp, signal):
-    pass  # 🚫 已取消记录 CSV
+    pass
 
-# ========== 主函数 ==========
 def main():
     try:
         now = get_est_now()
@@ -272,11 +188,16 @@ def main():
 
         df = get_data()
         time_signal, signal = generate_signal(df)
+
+        ha_warn = heikin_ashi_warning(df)
+        if ha_warn:
+            print(ha_warn)
+            send_to_discord(ha_warn)
+
         if signal:
             msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
             print(msg)
             send_to_discord(msg)
-            # log_signal_to_csv(time_signal, signal)  # ❌ 不记录日志
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
 
