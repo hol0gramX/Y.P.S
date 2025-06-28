@@ -65,37 +65,6 @@ def allow_top_rebound_put(row, prev):
         row['MACD'] < 0.3
     )
 
-def allow_bollinger_rebound(row, prev_row, direction):
-    if direction == "CALL":
-        return (
-            prev_row["Close"] < prev_row["BBL"] and
-            row["Close"] > row["BBL"] and
-            row["RSI"] > 48 and row["MACD"] > 0
-        )
-    elif direction == "PUT":
-        return (
-            prev_row["Close"] > prev_row["BBU"] and
-            row["Close"] < row["BBU"] and
-            row["RSI"] < 52 and row["MACD"] < 0
-        )
-    return False
-
-def allow_call_reentry(row, prev):
-    return (
-        prev["Close"] < prev["VWAP"] and
-        row["Close"] > row["VWAP"] and
-        row["RSI"] > 53 and
-        row["MACDh"] > 0.1
-    )
-
-def allow_put_reentry(row, prev):
-    return (
-        prev["Close"] > prev["VWAP"] and
-        row["Close"] < row["VWAP"] and
-        row["RSI"] < 47 and
-        row["MACDh"] < 0.05
-    )
-
 # ========= Heikin-Ashi 动能衰竭检测 ========= 
 def heikin_ashi_warning(df):
     ha = df[['Open', 'High', 'Low', 'Close']].copy()
@@ -114,7 +83,7 @@ def heikin_ashi_warning(df):
     latest = candles.iloc[-1]
     previous = candles.iloc[-2]
 
-    # 调试输出
+    # 调试输出：查看 Full Range 和 Body Ratio 的计算
     print(f"Debug - Full Range: {full_ranges.iloc[-1]}, Body: {bodies.iloc[-1]}")
     print(f"Debug - HA_Close: {latest['HA_Close']}, HA_Open: {latest['HA_Open']}, Body Ratio: {body_ratio.iloc[-1]}")
     print(f"Debug - Previous HA_Close: {previous['HA_Close']}, Previous HA_Open: {previous['HA_Open']}")
@@ -233,6 +202,5 @@ def backtest(start_date_str="2025-06-26", end_date_str="2025-06-27"):
 # ========= 执行 =========
 if __name__ == "__main__":
     backtest("2025-06-26", "2025-06-27")
-
 
 
