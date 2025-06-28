@@ -65,6 +65,37 @@ def allow_top_rebound_put(row, prev):
         row['MACD'] < 0.3
     )
 
+def allow_bollinger_rebound(row, prev_row, direction):
+    if direction == "CALL":
+        return (
+            prev_row["Close"] < prev_row["BBL"] and
+            row["Close"] > row["BBL"] and
+            row["RSI"] > 48 and row["MACD"] > 0
+        )
+    elif direction == "PUT":
+        return (
+            prev_row["Close"] > prev_row["BBU"] and
+            row["Close"] < row["BBU"] and
+            row["RSI"] < 52 and row["MACD"] < 0
+        )
+    return False
+
+def allow_call_reentry(row, prev):
+    return (
+        prev["Close"] < prev["VWAP"] and
+        row["Close"] > row["VWAP"] and
+        row["RSI"] > 53 and
+        row["MACDh"] > 0.1
+    )
+
+def allow_put_reentry(row, prev):
+    return (
+        prev["Close"] > prev["VWAP"] and
+        row["Close"] < row["VWAP"] and
+        row["RSI"] < 47 and
+        row["MACDh"] < 0.05
+    )
+
 # ========= Heikin-Ashi 动能衰竭检测 ========= 
 def heikin_ashi_warning(df):
     ha = df[['Open', 'High', 'Low', 'Close']].copy()
