@@ -161,10 +161,6 @@ def backtest(start_date_str, end_date_str):
                     strength = determine_strength(row, "call")
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Call 出场信号（{strength}）")
                     position = "none"
-                    if check_put_entry(row) or allow_top_rebound_put(row, prev):
-                        strength_put = determine_strength(row, "put")
-                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Put 入场（{strength_put}）")
-                        position = "put"
             continue
 
         if position == "put":
@@ -175,10 +171,6 @@ def backtest(start_date_str, end_date_str):
                     strength = determine_strength(row, "put")
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Put 出场信号（{strength}）")
                     position = "none"
-                    if check_call_entry(row) or allow_bottom_rebound_call(row, prev):
-                        strength_call = determine_strength(row, "call")
-                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Call 入场（{strength_call}）")
-                        position = "call"
             continue
 
         if position == "none":
@@ -198,14 +190,6 @@ def backtest(start_date_str, end_date_str):
                 strength = determine_strength(row, "put")
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
                 position = "put"
-            elif allow_call_reentry(row, prev):
-                strength = determine_strength(row, "call")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 趋势回补 Call 再入场（{strength}）")
-                position = "call"
-            elif allow_put_reentry(row, prev):
-                strength = determine_strength(row, "put")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 趋势回补 Put 再入场（{strength}）")
-                position = "put"
 
     # 收盘清仓兜底
     last_ts = df.index[-1]
@@ -218,5 +202,4 @@ def backtest(start_date_str, end_date_str):
 
 if __name__ == "__main__":
     backtest("2025-06-20", "2025-06-27")
-
 
