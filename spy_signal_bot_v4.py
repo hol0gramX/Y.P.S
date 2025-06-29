@@ -124,17 +124,35 @@ def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
 
 def determine_strength(row, direction):
     vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
+    vol_strength = row['Volume'] / row['Vol_MA5'] if row['Vol_MA5'] > 0 else 1
+    rsi_slope = row['RSI_SLOPE'] if 'RSI_SLOPE' in row else 0
+    
     if direction == "call":
-        if row['RSI'] > 65 and row['MACDh'] > 0.5 and vwap_diff_ratio > 0.005:
+        if row['RSI'] >= 60 and row['MACDh'] > 0.3 and vwap_diff_ratio > 0.002 and vol_strength > 1.2:
             return "强"
-        elif row['RSI'] < 55 or vwap_diff_ratio < 0:
+        elif row['RSI'] >= 55 and row['MACDh'] > 0 and vwap_diff_ratio > 0 and vol_strength > 1:
+            return "中"
+        elif row['RSI'] < 50 or vwap_diff_ratio < 0:
             return "弱"
+        else:
+            if rsi_slope > 0.1 and vol_strength > 0.8:
+                return "中"
+            return "弱"
+
     elif direction == "put":
-        if row['RSI'] < 35 and row['MACDh'] < -0.5 and vwap_diff_ratio < -0.005:
+        if row['RSI'] <= 40 and row['MACDh'] < -0.3 and vwap_diff_ratio < -0.002 and vol_strength > 1.2:
             return "强"
-        elif row['RSI'] > 45 or vwap_diff_ratio > 0:
+        elif row['RSI'] <= 45 and row['MACDh'] < 0 and vwap_diff_ratio < 0 and vol_strength > 1:
+            return "中"
+        elif row['RSI'] > 50 or vwap_diff_ratio > 0:
             return "弱"
+        else:
+            if rsi_slope < -0.1 and vol_strength > 0.8:
+                return "中"
+            return "弱"
+
     return "中"
+
 
 def check_call_entry(row):
     return row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
