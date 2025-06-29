@@ -120,13 +120,11 @@ def get_data():
     return df
 
 # ========== 信号判断函数 ==========
-def strong_volume(row): return row['Volume'] >= row['Vol_MA5']
-
 def determine_strength(row, direction):
     vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
     vol_strength = row['Volume'] / row['Vol_MA5'] if row['Vol_MA5'] > 0 else 1
-    rsi_slope = row['RSI_SLOPE'] if 'RSI_SLOPE' in row else 0
-    
+    rsi_slope = row.get('RSI_SLOPE', 0)
+
     if direction == "call":
         if row['RSI'] >= 60 and row['MACDh'] > 0.3 and vwap_diff_ratio > 0.002 and vol_strength > 1.2:
             return "强"
@@ -153,7 +151,6 @@ def determine_strength(row, direction):
 
     return "中"
 
-
 def check_call_entry(row):
     return row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
 
@@ -172,22 +169,16 @@ def check_call_exit(row):
 def check_put_exit(row):
     return row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
 
-def allow_call_reentry(row, prev):
-    return prev['Close'] < prev['VWAP'] and row['Close'] > row['VWAP'] and row['RSI'] > 53 and row['MACDh'] > 0.1
-
-def allow_put_reentry(row, prev):
-    return prev['Close'] > prev['VWAP'] and row['Close'] < row['VWAP'] and row['RSI'] < 47 and row['MACDh'] < 0.05
+def is_trend_continuation(row, prev, position):
+    if position == "call":
+        return row['MACDh'] > 0 and row['RSI'] > 45
+    elif position == "put":
+        return row['MACDh'] < 0 and row['RSI'] < 55
+    return False
 
 # ========== 信号判断主逻辑 ==========
 def generate_signal(df):
-    if df.empty:
-        print("[错误] 数据为空，无法判断信号")
-        return None, None
-    if 'MACD' not in df.columns or df['MACD'].isnull().all():
-        print("[错误] MACD计算失败，数据不完整")
-        return None, None
-    if len(df) < 6:
-        # 数据条数太少，暂不判断信号，安全退出
+    if df.empty or 'MACD' not in df.columns or df['MACD'].isnull().all() or len(df) < 6:
         return None, None
 
     row = df.iloc[-1]
@@ -197,6 +188,8 @@ def generate_signal(df):
     now_time = row.name
 
     if pos == "call" and check_call_exit(row):
+        if is_trend_continuation(row, prev, "call"):
+            return now_time, f"⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
         strength = determine_strength(row, "call")
         state["position"] = "none"
         save_last_signal(state)
@@ -208,6 +201,8 @@ def generate_signal(df):
         return now_time, f"⚠️ Call 出场信号（{strength}）"
 
     elif pos == "put" and check_put_exit(row):
+        if is_trend_continuation(row, prev, "put"):
+            return now_time, f"⏳ 趋势中继豁免，Put 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
         strength = determine_strength(row, "put")
         state["position"] = "none"
         save_last_signal(state)
@@ -239,16 +234,6 @@ def generate_signal(df):
             state["position"] = "put"
             save_last_signal(state)
             return now_time, f"📉 顶部反转 Put 捕捉（{strength}）"
-        elif allow_call_reentry(row, prev):
-            strength = determine_strength(row, "call")
-            state["position"] = "call"
-            save_last_signal(state)
-            return now_time, f"📈 趋势回补 Call 再入场（{strength}）"
-        elif allow_put_reentry(row, prev):
-            strength = determine_strength(row, "put")
-            state["position"] = "put"
-            save_last_signal(state)
-            return now_time, f"📉 趋势回补 Put 再入场（{strength}）"
 
     return None, None
 
@@ -265,9 +250,9 @@ def main():
         now = get_est_now()
         print("=" * 60)
         print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        
+
         force_clear_at_close()
-        
+
         state = load_last_signal()
         print(f"📦 当前仓位状态：{state.get('position', 'none')}")
         print("-" * 60)
@@ -290,4 +275,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
