@@ -70,6 +70,7 @@ def compute_rsi(s, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
+    print("MACD columns:", macd.columns)  # 加这句，打印列名确认
     df['MACD'] = macd['MACD_5_10_20'].fillna(0)
     df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
