@@ -22,24 +22,48 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+import yfinance as yf
+import pandas as pd
+
+SYMBOL = "SPY"
+EST = ZoneInfo("America/New_York")
+
 def fetch_and_debug():
+    now = datetime.now(tz=EST)
+    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    end_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
+
     print(f"Fetching {SYMBOL} data from {start_time} to {end_time} (EST)")
-    df = yf.download(SYMBOL, interval="1m", start=start_time, end=end_time, progress=False, prepost=True, auto_adjust=True)
+
+    start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_utc = end_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+    df = yf.download(
+        SYMBOL,
+        interval="1m",
+        start=start_utc,
+        end=end_utc,
+        progress=False,
+        prepost=True,
+        auto_adjust=True
+    )
 
     if df.empty:
-        print("No data fetched")
-        return
+        raise ValueError("数据为空")
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    # 修复时区问题
+    # 解决时区问题的关键点
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
 
-    print(df.tail())
+    print(df.head())
+    # 这里你可以加其他调试代码
+
+if __name__ == "__main__":
+    fetch_and_debug()
 
     df = yf.download(
         SYMBOL,
