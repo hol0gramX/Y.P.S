@@ -1,25 +1,43 @@
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_market_calendars as mcal
 
 # ========== 参数 ==========
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
+nasdaq = mcal.get_calendar("NASDAQ")
+
+# ========== 获取最近交易日 ==========
+def get_last_trading_day(date):
+    sched = nasdaq.schedule(start_date=date - timedelta(days=7), end_date=date)
+    if sched.empty:
+        return None
+    return sched.index[-1].date()
+
 now = datetime.now(tz=EST)
-start_time = now - timedelta(days=1)
+last_trading_day = get_last_trading_day(now.date())
+
+if not last_trading_day:
+    print("过去7天无交易日，无法获取数据")
+    exit()
+
+# ========== 设置当天盘前4点到16点区间 ==========
+start_dt = datetime.combine(last_trading_day, time(4, 0), tzinfo=EST)
+end_dt = datetime.combine(last_trading_day, time(16, 0), tzinfo=EST)
 
 # ========== 拉数据 ==========
-print("⏳ 正在拉取数据中...")
+print(f"⏳ 正在拉取 {last_trading_day} 的1分钟数据...")
 df = yf.download(
     SYMBOL,
-    start=start_time.astimezone(ZoneInfo("UTC")),
-    end=now.astimezone(ZoneInfo("UTC")),
+    start=start_dt.astimezone(ZoneInfo("UTC")),
+    end=end_dt.astimezone(ZoneInfo("UTC")),
     interval="1m",
     prepost=True,
     auto_adjust=True,
-    progress=False
+    progress=False,
 )
 
 if df.empty:
