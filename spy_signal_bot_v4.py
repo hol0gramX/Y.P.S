@@ -58,12 +58,28 @@ def force_clear_at_close():
         if state.get("position", "none") != "none":
             state["position"] = "none"
             save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] \u23f0 15:59 \u81ea\u52a8\u6e05\u4ed3\uff08\u72b6\u6001\u5f52\u96f6\uff09")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏰ 15:59 自动清仓（状态归零）")
+
+# ========== 技术指标 ==========
+def compute_rsi(s, length=14):
+    delta = s.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    rs = up.rolling(length).mean() / down.rolling(length).mean()
+    return (100 - 100 / (1 + rs)).fillna(50)
+
+def compute_macd(df):
+    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
+    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
+    return df
 
 # ========== 数据拉取 ==========
 def get_data():
     now = get_est_now()
     start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
+
     start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     end_utc = now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
@@ -78,7 +94,7 @@ def get_data():
     )
 
     if df.empty:
-        raise ValueError("\u6570\u636e\u4e3a\u7a7a")
+        raise ValueError("数据为空")
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -89,49 +105,51 @@ def get_data():
     else:
         df.index = df.index.tz_convert(EST)
 
-    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
-    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd['MACD_5_10_20']
-    df['MACDs'] = macd['MACDs_5_10_20']
-    df['MACDh'] = macd['MACDh_5_10_20']
     df['EMA20'] = ta.ema(df['Close'], length=20)
+    df = compute_macd(df)
+    df.ffill(inplace=True)
+    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20"], inplace=True)
 
-    df.dropna(subset=["High", "Low", "Close", "RSI", "RSI_SLOPE", "MACD", "MACDh", "EMA20"], inplace=True)
     return df
 
-# ========== 判断逻辑 ==========
+# ========== 信号判断函数 ==========
 def determine_strength(row, direction):
     ema_diff_ratio = (row['Close'] - row['EMA20']) / row['EMA20']
     rsi_slope = row.get('RSI_SLOPE', 0)
 
     if direction == "call":
         if row['RSI'] >= 60 and row['MACDh'] > 0.3 and ema_diff_ratio > 0.002:
-            return "\u5f3a"
+            return "强"
         elif row['RSI'] >= 55 and row['MACDh'] > 0 and ema_diff_ratio > 0:
-            return "\u4e2d"
+            return "中"
         elif row['RSI'] < 50 or ema_diff_ratio < 0:
-            return "\u5f31"
+            return "弱"
         else:
-            return "\u4e2d" if rsi_slope > 0.1 else "\u5f31"
+            if rsi_slope > 0.1:
+                return "中"
+            return "弱"
 
     elif direction == "put":
         if row['RSI'] <= 40 and row['MACDh'] < -0.3 and ema_diff_ratio < -0.002:
-            return "\u5f3a"
+            return "强"
         elif row['RSI'] <= 45 and row['MACDh'] < 0 and ema_diff_ratio < 0:
-            return "\u4e2d"
+            return "中"
         elif row['RSI'] > 50 or ema_diff_ratio > 0:
-            return "\u5f31"
+            return "弱"
         else:
-            return "\u4e2d" if rsi_slope < -0.1 else "\u5f31"
+            if rsi_slope < -0.1:
+                return "中"
+            return "弱"
 
-    return "\u4e2d"
+    return "中"
 
 def check_call_entry(row):
-    return row['Close'] > row['EMA20'] and row['RSI'] > 55 and row['MACDh'] > 0
+    return row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
 
 def check_put_entry(row):
-    return row['Close'] < row['EMA20'] and row['RSI'] < 45 and row['MACDh'] < 0
+    return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
 
 def allow_bottom_rebound_call(row, prev):
     return row['Close'] < row['EMA20'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3
@@ -152,7 +170,7 @@ def is_trend_continuation(row, prev, position):
         return row['MACDh'] < 0 and row['RSI'] < 55
     return False
 
-# ========== 主信号逻辑 ==========
+# ========== 信号判断主逻辑 ==========
 def generate_signal(df):
     if df.empty or 'MACD' not in df.columns or df['MACD'].isnull().all() or len(df) < 6:
         return None, None
@@ -165,7 +183,7 @@ def generate_signal(df):
 
     if pos == "call" and check_call_exit(row):
         if is_trend_continuation(row, prev, "call"):
-            return now_time, f"\u23f3 \u8d8b\u52bf\u4e2d\u7ee7\u8c6a\u514d\uff0cCall \u6301\u4ed3\u4e0d\u51fa\u573a\uff08RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}\uff09"
+            return now_time, f"⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
         strength = determine_strength(row, "call")
         state["position"] = "none"
         save_last_signal(state)
@@ -173,12 +191,12 @@ def generate_signal(df):
             state["position"] = "put"
             strength_put = determine_strength(row, "put")
             save_last_signal(state)
-            return now_time, f"\ud83d\udd01 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）"
-        return now_time, f"\u26a0\ufe0f Call \u51fa\u573a\u4fe1\u53f7\uff08{strength}\uff09"
+            return now_time, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）"
+        return now_time, f"⚠️ Call 出场信号（{strength}）"
 
     elif pos == "put" and check_put_exit(row):
         if is_trend_continuation(row, prev, "put"):
-            return now_time, f"\u23f3 \u8d8b\u52bf\u4e2d\u7ee7\u8c6a\u514d\uff0cPut \u6301\u4ed3\u4e0d\u51fa\u573a\uff08RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}\uff09"
+            return now_time, f"⏳ 趋势中继豁免，Put 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
         strength = determine_strength(row, "put")
         state["position"] = "none"
         save_last_signal(state)
@@ -186,30 +204,30 @@ def generate_signal(df):
             state["position"] = "call"
             strength_call = determine_strength(row, "call")
             save_last_signal(state)
-            return now_time, f"\ud83d\udd01 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）"
-        return now_time, f"\u26a0\ufe0f Put \u51fa\u573a\u4fe1\u53f7\uff08{strength}\uff09"
+            return now_time, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）"
+        return now_time, f"⚠️ Put 出场信号（{strength}）"
 
     elif pos == "none":
         if check_call_entry(row):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return now_time, f"\ud83d\udcc8 主升浪 Call 入场（{strength}）"
+            return now_time, f"📈 主升浪 Call 入场（{strength}）"
         elif check_put_entry(row):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return now_time, f"\ud83d\udcc9 主跌浪 Put 入场（{strength}）"
+            return now_time, f"📉 主跌浪 Put 入场（{strength}）"
         elif allow_bottom_rebound_call(row, prev):
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
-            return now_time, f"\ud83d\udcc8 底部反弹 Call 捕捉（{strength}）"
+            return now_time, f"📈 底部反弹 Call 捕捉（{strength}）"
         elif allow_top_rebound_put(row, prev):
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
-            return now_time, f"\ud83d\udcc9 顶部反转 Put 捕捉（{strength}）"
+            return now_time, f"📉 顶部反转 Put 捕捉（{strength}）"
 
     return None, None
 
@@ -225,16 +243,16 @@ def main():
     try:
         now = get_est_now()
         print("=" * 60)
-        print(f"\ud83d\udd52 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
         force_clear_at_close()
 
         state = load_last_signal()
-        print(f"\ud83d\udce6 当前仓位状态：{state.get('position', 'none')}")
+        print(f"📦 当前仓位状态：{state.get('position', 'none')}")
         print("-" * 60)
 
         if not is_market_open_now():
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] \ud83d\udd57 盘前/盘后，不进行信号判断")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕗 盘前/盘后，不进行信号判断")
             return
 
         df = get_data()
@@ -244,7 +262,7 @@ def main():
             print(msg)
             send_to_discord(msg)
         else:
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] \u274e 无交易信号")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
 
     except Exception as e:
         print("[错误]", e)
