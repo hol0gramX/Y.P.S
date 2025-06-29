@@ -1,12 +1,11 @@
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-# 模拟测试用：2025年6月26日 04:00 到 09:30（美东时间）
-EST = ZoneInfo("America/New_York")
 SYMBOL = "SPY"
+EST = ZoneInfo("America/New_York")
 
 def compute_rsi(s, length=14):
     delta = s.diff()
@@ -21,14 +20,6 @@ def compute_macd(df):
     df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
-
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
-import yfinance as yf
-import pandas as pd
-
-SYMBOL = "SPY"
-EST = ZoneInfo("America/New_York")
 
 def fetch_and_debug():
     now = datetime.now(tz=EST)
@@ -60,27 +51,6 @@ def fetch_and_debug():
         df.index = df.index.tz_convert(EST)
 
     print(df.head())
-    # 这里你可以加其他调试代码
-
-if __name__ == "__main__":
-    fetch_and_debug()
-
-    df = yf.download(
-        SYMBOL,
-        interval="1m",
-        start=start_utc,
-        end=end_utc,
-        prepost=True,
-        auto_adjust=True,
-        progress=False
-    )
-
-    if df.empty:
-        print("❌ 无数据，请检查网络或该时间段是否存在交易数据")
-        return
-
-    # 转换时区
-    df.index = df.index.tz_localize("UTC").tz_convert(EST)
 
     # 指标计算
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
