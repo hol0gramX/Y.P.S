@@ -23,15 +23,23 @@ def compute_macd(df):
     return df
 
 def fetch_and_debug():
-    # 设置时间区间
-    start_est = datetime(2025, 6, 26, 4, 0, tzinfo=EST)
-    end_est = datetime(2025, 6, 26, 9, 30, tzinfo=EST)
+    print(f"Fetching {SYMBOL} data from {start_time} to {end_time} (EST)")
+    df = yf.download(SYMBOL, interval="1m", start=start_time, end=end_time, progress=False, prepost=True, auto_adjust=True)
 
-    # 转换为 UTC，因为 yfinance 接口使用 UTC
-    start_utc = start_est.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-    end_utc = end_est.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    if df.empty:
+        print("No data fetched")
+        return
 
-    print(f"Fetching {SYMBOL} data from {start_est} to {end_est} (EST)")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    # 修复时区问题
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
+
+    print(df.tail())
 
     df = yf.download(
         SYMBOL,
