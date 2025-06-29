@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 import pandas_ta as ta
 
@@ -15,12 +15,9 @@ def compute_rsi(s, length=14):
     return (100 - 100 / (1 + rs)).fillna(50)
 
 def compute_macd(df):
-    if df is None or df.empty:
-        print("⚠️ 传入空数据，MACD计算跳过")
-        return df
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    if macd is None:
-        print("⚠️ pandas_ta.macd返回None，跳过")
+    if macd is None or macd.empty:
+        print("⚠️ 传入空数据，MACD计算跳过")
         return df
     df['MACD'] = macd['MACD_5_10_20'].fillna(0)
     df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
@@ -38,6 +35,7 @@ def fetch_data_dynamic_window(test_datetime=None):
 
     print(f"⌛ 拉取数据时间段（EST）：{start_time} 到 {end_time}")
 
+    # 转成UTC给yf用
     start_utc = start_time.astimezone(ZoneInfo("UTC"))
     end_utc = end_time.astimezone(ZoneInfo("UTC"))
 
@@ -54,12 +52,12 @@ def fetch_data_dynamic_window(test_datetime=None):
     )
 
     if df.empty:
-        print("⚠️ 无数据，fetch_data_dynamic_window返回None")
+        print("⚠️ yf拉取数据为空")
         return None
 
     print(f"✅ 拉取数据成功，条数: {len(df)}")
     print("数据索引样例（前5条）：")
-    print(df.head().index)
+    print(df.index[:5])
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -67,51 +65,64 @@ def fetch_data_dynamic_window(test_datetime=None):
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df = df[df["Volume"] > 0]
 
+    # 确保索引是带时区的UTC时间，转换到EST时区
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 过滤确保只要 EST 时间在4:00到now的数据
-    df = df[(df.index >= start_time) & (df.index < end_time)]
+    print(f"df.index tzinfo (转换后): {df.index.tz}")
 
+    # 下面这部分修改，转成无时区datetime进行过滤，避免时区不匹配导致过滤空数据
+    start_time_naive = start_time.replace(tzinfo=None)
+    end_time_naive = end_time.replace(tzinfo=None)
+
+    df.index = df.index.tz_convert(None)  # 转成naive datetime索引
+
+    print(f"过滤前数据条数: {len(df)}")
+    df = df[(df.index >= start_time_naive) & (df.index < end_time_naive)]
     print(f"过滤后有效数据条数: {len(df)}")
-    if len(df) > 0:
-        print(f"数据起始时间: {df.index[0]}")
-        print(f"数据结束时间: {df.index[-1]}")
+
+    if df.empty:
+        print("⚠️ 过滤后无有效数据")
+        return None
 
     # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-
     df = compute_macd(df)
 
+    # 可能计算指标时仍会有NaN，使用ffill填充
     df.ffill(inplace=True)
     df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
 
-    print(f"清洗及计算后数据条数: {len(df)}")
+    if df.empty:
+        print("⚠️ 指标计算后无有效数据")
+        return None
 
     return df
 
 def main():
+    # 模拟 2025年6月27日 9:30:00 EST
     test_time_est = datetime(2025, 6, 27, 9, 30, 0, tzinfo=EST)
     print(f"🕒 模拟时间点: {test_time_est}")
 
     df = fetch_data_dynamic_window(test_time_est)
 
     if df is None or df.empty:
-        print("❌ 没拉到有效数据，程序结束")
+        print("❌ 未获取到有效数据，退出")
         return
 
-    print(f"✅ 数据总条数: {len(df)}")
-    print(f"起始时间: {df.index[0].strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    print(f"结束时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"✅ 模拟时间点：{test_time_est.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"数据总条数: {len(df)}")
+    print(f"起始时间: {df.index[0].strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"结束时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S')}")
 
     last_row = df.iloc[-1]
     print("\n📊 9:30 时刻最新一条数据：")
-    print(f"时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Close: {last_row['Close']:.2f} | Volume: {last_row['Volume']}")
     print(f"Vol_MA5: {last_row['Vol_MA5']:.2f} | RSI: {last_row['RSI']:.2f} | RSI_SLOPE: {last_row['RSI_SLOPE']:.3f}")
     print(f"VWAP: {last_row['VWAP']:.2f} | MACD: {last_row['MACD']:.3f} | MACDh: {last_row['MACDh']:.3f}")
