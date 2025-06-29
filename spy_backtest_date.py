@@ -122,22 +122,6 @@ def check_put_exit(row):
         (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
     )
 
-def allow_call_reentry(row, prev):
-    return (
-        prev['Close'] < prev['EMA20'] and
-        row['Close'] > row['EMA20'] and
-        row['RSI'] > 53 and
-        row['MACDh'] > 0.1
-    )
-
-def allow_put_reentry(row, prev):
-    return (
-        prev['Close'] > prev['EMA20'] and
-        row['Close'] < row['EMA20'] and
-        row['RSI'] < 47 and
-        row['MACDh'] < 0.05
-    )
-
 def is_trend_continuation(row, prev, position):
     if position == "call":
         return (row['MACDh'] > 0) and (row['RSI'] > 45)
