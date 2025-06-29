@@ -80,8 +80,8 @@ def get_data():
     now = get_est_now()
     start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
 
-    start_utc = start_time.astimezone(ZoneInfo("UTC"))
-    end_utc = now.astimezone(ZoneInfo("UTC"))
+    start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_utc = now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
     df = yf.download(
         SYMBOL,
@@ -106,8 +106,6 @@ def get_data():
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
-
-    df = df[(df.index >= start_time) & (df.index < now)]
 
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = compute_rsi(df['Close'])
