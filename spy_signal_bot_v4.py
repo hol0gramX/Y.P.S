@@ -70,7 +70,6 @@ def compute_rsi(s, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    print("MACD columns:", macd.columns)  # 加这句，打印列名确认
     df['MACD'] = macd['MACD_5_10_20'].fillna(0)
     df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
@@ -255,9 +254,9 @@ def main():
         print(f"📦 当前仓位状态：{state.get('position', 'none')}")
         print("-" * 60)
 
-       # if not is_market_open_now():
-       #     print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕗 盘前/盘后，不进行信号判断")
-       #     return
+        if not is_market_open_now():
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🕗 盘前/盘后，不进行信号判断")
+            return
 
         df = get_data()
         time_signal, signal = generate_signal(df)
