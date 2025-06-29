@@ -1,77 +1,68 @@
+import pandas as pd
 import yfinance as yf
+import pandas_ta as ta
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import pandas as pd
-import pandas_ta as ta  # 用pandas_ta来算MACD等更方便
 
-SYMBOL = "SPY"
+# 模拟测试用：2025年6月26日 04:00 到 09:30（美东时间）
 EST = ZoneInfo("America/New_York")
+SYMBOL = "SPY"
 
-def compute_rsi(series, length=14):
-    delta = series.diff()
+def compute_rsi(s, length=14):
+    delta = s.diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
     rs = up.rolling(length).mean() / down.rolling(length).mean()
     return (100 - 100 / (1 + rs)).fillna(50)
 
-def get_est_now_fake():
-    return datetime(2025, 6, 27, 9, 30, 0, tzinfo=EST)
+def compute_macd(df):
+    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
+    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
+    return df
 
-def get_data_debug():
-    now = get_est_now_fake()
-    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    start_utc = start_time.astimezone(ZoneInfo("UTC"))
-    end_utc = now.astimezone(ZoneInfo("UTC"))
+def fetch_and_debug():
+    # 设置时间区间
+    start_est = datetime(2025, 6, 26, 4, 0, tzinfo=EST)
+    end_est = datetime(2025, 6, 26, 9, 30, tzinfo=EST)
 
-    print(f"模拟当前时间（EST）: {now}")
-    print(f"开始拉取时间（EST）: {start_time}")
-    print(f"开始拉取时间（UTC）: {start_utc}")
-    print(f"结束拉取时间（UTC）: {end_utc}")
+    # 转换为 UTC，因为 yfinance 接口使用 UTC
+    start_utc = start_est.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_utc = end_est.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+    print(f"Fetching {SYMBOL} data from {start_est} to {end_est} (EST)")
 
     df = yf.download(
         SYMBOL,
         interval="1m",
         start=start_utc,
         end=end_utc,
-        progress=False,
         prepost=True,
-        auto_adjust=False
+        auto_adjust=True,
+        progress=False
     )
 
     if df.empty:
-        print("数据为空")
-        return None
+        print("❌ 无数据，请检查网络或该时间段是否存在交易数据")
+        return
 
-    print(f"拉取数据条数: {len(df)}")
-    print(f"数据索引时区（raw）: {df.index.tz}")
-    # 转为 EST
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC").tz_convert(EST)
-    else:
-        df.index = df.index.tz_convert(EST)
-    print(f"数据索引时区（转为EST后）: {df.index.tz}")
+    # 转换时区
+    df.index = df.index.tz_localize("UTC").tz_convert(EST)
 
-    # --- 计算指标 ---
-    # RSI
+    # 指标计算
+    df = df.dropna(subset=["High", "Low", "Close", "Volume"])
+    df['EMA20'] = ta.ema(df['Close'], length=20)
     df['RSI'] = compute_rsi(df['Close'])
-    # RSI_SLOPE (3分钟差分)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
-    # MACD 使用 pandas_ta
-    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
-    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
-    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
-    # VWAP
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df = compute_macd(df)
+    df.ffill(inplace=True)
+    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20"], inplace=True)
 
-    print("最近5条成交量：")
-    print(df['Volume'].tail(5))
-
-    print("最近5条指标数据：")
-    print(df.tail(5)[['Close', 'RSI', 'RSI_SLOPE', 'MACD', 'MACDs', 'MACDh', 'VWAP']])
-
-    return df
+    print(f"\n✅ 提取到 {len(df)} 条有效数据")
+    print("\n📊 最后10条数据（含指标）:")
+    print(df.tail(10)[["Close", "EMA20", "RSI", "RSI_SLOPE", "MACD", "MACDh"]])
 
 if __name__ == "__main__":
-    get_data_debug()
+    fetch_and_debug()
 
