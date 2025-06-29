@@ -21,7 +21,6 @@ def is_market_day(dt):
 
 # ========== 数据获取 ==========
 def fetch_data(start_date, end_date):
-    # 包含end_date当天全天数据，end+1日才截止
     df = yf.download(
         SYMBOL,
         start=start_date,
@@ -37,16 +36,13 @@ def fetch_data(start_date, end_date):
         df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
 
-    # 时区转换
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 去重
     df = df[~df.index.duplicated(keep='last')]
 
-    # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = ta.rsi(df['Close'], length=14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
@@ -56,7 +52,6 @@ def fetch_data(start_date, end_date):
     df['MACDh'] = macd['MACDh_5_10_20']
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
 
-    # 丢弃必要字段空值
     df.dropna(subset=['High', 'Low', 'Close', 'Volume', 'Vol_MA5', 'RSI', 'RSI_SLOPE', 'VWAP', 'MACD', 'MACDh'], inplace=True)
 
     return df
@@ -160,6 +155,19 @@ def allow_put_reentry(row, prev):
         row['MACDh'] < 0.05
     )
 
+# ========== 新增：趋势中继豁免判断 ==========
+def is_trend_continuation(row, prev, position):
+    """
+    趋势中继豁免出场判断
+    持call时，只要MACDh > 0且RSI > 45，豁免出场
+    持put时，只要MACDh < 0且RSI < 55，豁免出场
+    """
+    if position == "call":
+        return (row['MACDh'] > 0) and (row['RSI'] > 45)
+    elif position == "put":
+        return (row['MACDh'] < 0) and (row['RSI'] < 55)
+    return False
+
 # ========== 回测主逻辑 ==========
 def backtest(start_date_str, end_date_str):
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
@@ -178,7 +186,6 @@ def backtest(start_date_str, end_date_str):
         ts = row.name
         ttime = ts.time()
 
-        # 只在常规交易时间内操作
         if not is_market_day(ts) or ttime < REGULAR_START or ttime >= REGULAR_END:
             # 收盘强制清仓
             if ttime >= time(15, 59) and position != "none":
@@ -188,26 +195,32 @@ def backtest(start_date_str, end_date_str):
 
         if position == "call":
             if check_call_exit(row):
-                strength = determine_strength(row, "call")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Call 出场信号（{strength}）")
-                position = "none"
-                # 反手Put判定
-                if check_put_entry(row) or allow_top_rebound_put(row, prev):
-                    strength_put = determine_strength(row, "put")
-                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Put 入场（{strength_put}）")
-                    position = "put"
+                # 趋势中继豁免
+                if is_trend_continuation(row, prev, position):
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）")
+                else:
+                    strength = determine_strength(row, "call")
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Call 出场信号（{strength}）")
+                    position = "none"
+                    if check_put_entry(row) or allow_top_rebound_put(row, prev):
+                        strength_put = determine_strength(row, "put")
+                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Put 入场（{strength_put}）")
+                        position = "put"
             continue
 
         if position == "put":
             if check_put_exit(row):
-                strength = determine_strength(row, "put")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Put 出场信号（{strength}）")
-                position = "none"
-                # 反手Call判定
-                if check_call_entry(row) or allow_bottom_rebound_call(row, prev):
-                    strength_call = determine_strength(row, "call")
-                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Call 入场（{strength_call}）")
-                    position = "call"
+                # 趋势中继豁免
+                if is_trend_continuation(row, prev, position):
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏳ 趋势中继豁免，Put 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）")
+                else:
+                    strength = determine_strength(row, "put")
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Put 出场信号（{strength}）")
+                    position = "none"
+                    if check_call_entry(row) or allow_bottom_rebound_call(row, prev):
+                        strength_call = determine_strength(row, "call")
+                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Call 入场（{strength_call}）")
+                        position = "call"
             continue
 
         if position == "none":
@@ -247,9 +260,7 @@ def backtest(start_date_str, end_date_str):
     for s in signals:
         print(s)
 
-
 if __name__ == "__main__":
-    # 示例，传入回测日期
     backtest("2025-06-20", "2025-06-27")
 
 
