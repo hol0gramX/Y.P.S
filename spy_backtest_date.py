@@ -91,24 +91,6 @@ def determine_strength(row, direction):
 
     return "中"
 
-def check_call_entry(row):
-    return (
-        row['Close'] > row['VWAP'] and
-        row['RSI'] > 53 and
-        row['MACD'] > 0 and
-        row['MACDh'] > 0 and
-        row['RSI_SLOPE'] > 0.15
-    )
-
-def check_put_entry(row):
-    return (
-        row['Close'] < row['VWAP'] and
-        row['RSI'] < 47 and
-        row['MACD'] < 0 and
-        row['MACDh'] < 0 and
-        row['RSI_SLOPE'] < -0.15
-    )
-
 def allow_bottom_rebound_call(row, prev):
     return (
         row['Close'] < row['VWAP'] and
