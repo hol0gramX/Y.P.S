@@ -21,9 +21,14 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
-def fetch_data_fixed_date():
-    start_time = datetime(2025, 6, 20, 4, 0, 0, tzinfo=EST)
-    end_time = datetime(2025, 6, 20, 10, 0, 0, tzinfo=EST)
+def fetch_data_dynamic_window(test_datetime=None):
+    if test_datetime:
+        now = test_datetime.astimezone(EST)
+    else:
+        now = datetime.now(tz=EST)
+
+    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    end_time = now
 
     # 转成UTC给yf用
     start_utc = start_time.astimezone(ZoneInfo("UTC"))
@@ -40,7 +45,7 @@ def fetch_data_fixed_date():
     )
 
     if df.empty:
-        print("无数据")
+        print("⚠️ 无数据")
         return None
 
     if isinstance(df.columns, pd.MultiIndex):
@@ -54,7 +59,6 @@ def fetch_data_fixed_date():
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 只保留当天数据，且限制时间段（4:00-10:00 EST）
     df = df[(df.index >= start_time) & (df.index < end_time)]
 
     # 计算指标
@@ -70,20 +74,24 @@ def fetch_data_fixed_date():
     return df
 
 def main():
-    df = fetch_data_fixed_date()
-    if df is None:
+    # 模拟 2025年6月27日 9:30:00 EST
+    test_time_est = datetime(2025, 6, 27, 9, 30, 0, tzinfo=EST)
+    df = fetch_data_dynamic_window(test_time_est)
+
+    if df is None or df.empty:
         return
 
+    print(f"✅ 模拟时间点：{test_time_est.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     print(f"数据总条数: {len(df)}")
-    # 打印开盘后30分钟数据（9:30 - 10:00）
-    start_print = datetime(2025, 6, 20, 9, 30, 0, tzinfo=EST)
-    end_print = datetime(2025, 6, 20, 10, 0, 0, tzinfo=EST)
+    print(f"起始时间: {df.index[0].strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"结束时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
-    df_print = df[(df.index >= start_print) & (df.index < end_print)]
-
-    print("开盘后前30分钟指标：")
-    for ts, row in df_print.iterrows():
-        print(f"{ts.strftime('%Y-%m-%d %H:%M:%S')} | Close: {row['Close']:.2f} | Volume: {row['Volume']} | Vol_MA5: {row['Vol_MA5']:.2f} | RSI: {row['RSI']:.2f} | RSI_SLOPE: {row['RSI_SLOPE']:.3f} | VWAP: {row['VWAP']:.2f} | MACD: {row['MACD']:.3f} | MACDh: {row['MACDh']:.3f}")
+    last_row = df.iloc[-1]
+    print("\n📊 9:30 时刻最新一条数据：")
+    print(f"时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"Close: {last_row['Close']:.2f} | Volume: {last_row['Volume']}")
+    print(f"Vol_MA5: {last_row['Vol_MA5']:.2f} | RSI: {last_row['RSI']:.2f} | RSI_SLOPE: {last_row['RSI_SLOPE']:.3f}")
+    print(f"VWAP: {last_row['VWAP']:.2f} | MACD: {last_row['MACD']:.3f} | MACDh: {last_row['MACDh']:.3f}")
 
 if __name__ == "__main__":
     main()
