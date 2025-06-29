@@ -1,8 +1,8 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
+import pandas_ta as ta
 
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
@@ -21,14 +21,13 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
-def fetch_data_around_open(date_str):
-    # 拉取当日4:00 - 10:00数据（包含盘前与开盘）
-    from datetime import timedelta
-    start_dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=EST).replace(hour=4, minute=0, second=0, microsecond=0)
-    end_dt = start_dt.replace(hour=10, minute=0)
+def fetch_data_fixed_date():
+    start_time = datetime(2025, 6, 20, 4, 0, 0, tzinfo=EST)
+    end_time = datetime(2025, 6, 20, 10, 0, 0, tzinfo=EST)
 
-    start_utc = start_dt.astimezone(ZoneInfo("UTC"))
-    end_utc = end_dt.astimezone(ZoneInfo("UTC"))
+    # 转成UTC给yf用
+    start_utc = start_time.astimezone(ZoneInfo("UTC"))
+    end_utc = end_time.astimezone(ZoneInfo("UTC"))
 
     df = yf.download(
         SYMBOL,
@@ -37,19 +36,26 @@ def fetch_data_around_open(date_str):
         end=end_utc,
         progress=False,
         prepost=True,
-        auto_adjust=True,
+        auto_adjust=True
     )
 
     if df.empty:
-        raise ValueError("无数据")
+        print("无数据")
+        return None
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    df.index = df.index.tz_localize("UTC").tz_convert(EST)
-
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df = df[df["Volume"] > 0]
+
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
+
+    # 只保留当天数据，且限制时间段（4:00-10:00 EST）
+    df = df[(df.index >= start_time) & (df.index < end_time)]
 
     # 计算指标
     df['Vol_MA5'] = df['Volume'].rolling(5).mean()
@@ -59,31 +65,26 @@ def fetch_data_around_open(date_str):
     df = compute_macd(df)
 
     df.ffill(inplace=True)
-    df.dropna(subset=["VWAP", "RSI", "MACD", "MACDh"], inplace=True)
+    df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
 
-    # 找9:30这一分钟的索引位置
-    open_time = time(9, 30)
-    idx_930 = df.index.get_loc(df[df.index.time == open_time].index[0])
+    return df
 
-    # 向上取20分钟（或者如果不足则取全部）
-    start_idx = max(0, idx_930 - 20)
-    df_slice = df.iloc[start_idx:idx_930 + 1]
+def main():
+    df = fetch_data_fixed_date()
+    if df is None:
+        return
 
-    return df_slice
+    print(f"数据总条数: {len(df)}")
+    # 打印开盘后30分钟数据（9:30 - 10:00）
+    start_print = datetime(2025, 6, 20, 9, 30, 0, tzinfo=EST)
+    end_print = datetime(2025, 6, 20, 10, 0, 0, tzinfo=EST)
+
+    df_print = df[(df.index >= start_print) & (df.index < end_print)]
+
+    print("开盘后前30分钟指标：")
+    for ts, row in df_print.iterrows():
+        print(f"{ts.strftime('%Y-%m-%d %H:%M:%S')} | Close: {row['Close']:.2f} | Volume: {row['Volume']} | Vol_MA5: {row['Vol_MA5']:.2f} | RSI: {row['RSI']:.2f} | RSI_SLOPE: {row['RSI_SLOPE']:.3f} | VWAP: {row['VWAP']:.2f} | MACD: {row['MACD']:.3f} | MACDh: {row['MACDh']:.3f}")
 
 if __name__ == "__main__":
-    import sys
-    date_str = datetime.now(EST).strftime("%Y-%m-%d")
-    if len(sys.argv) > 1:
-        date_str = sys.argv[1]
+    main()
 
-    print(f"调试 {SYMBOL} {date_str} 9:30分钟及前20分钟指标")
-    df_slice = fetch_data_around_open(date_str)
-
-    for ts, row in df_slice.iterrows():
-        print(
-            f"{ts.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
-            f"Close={row['Close']:.2f} Vol={int(row['Volume'])} Vol_MA5={row['Vol_MA5']:.1f} "
-            f"VWAP={row['VWAP']:.2f} RSI={row['RSI']:.1f} RSI_Slope={row['RSI_SLOPE']:.3f} "
-            f"MACD={row['MACD']:.3f} MACDh={row['MACDh']:.3f}"
-        )
