@@ -1,64 +1,60 @@
 import yfinance as yf
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import pandas as pd
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 
-def compute_rsi(s, length=14):
-    delta = s.diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    rs = up.rolling(length).mean() / down.rolling(length).mean()
-    rsi = 100 - 100 / (1 + rs)
-    return rsi.fillna(50)
+def get_est_now_fake():
+    # 模拟时间 2025-06-27 09:30:00 EST
+    return datetime(2025, 6, 27, 9, 30, 0, tzinfo=EST)
 
-def debug_fetch_fixed_datetime():
-    # 固定时间点：2025年6月27日 09:30 EST
-    fixed_now = datetime(2025, 6, 27, 9, 30, tzinfo=EST)
-    start_time = fixed_now.replace(hour=4, minute=0, second=0, microsecond=0)
-
-    print(f"模拟当前时间（EST）: {fixed_now}")
-    print(f"开始拉取时间（EST）: {start_time}")
-
+def get_data_debug():
+    now = get_est_now_fake()
+    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
     start_utc = start_time.astimezone(ZoneInfo("UTC"))
-    end_utc = fixed_now.astimezone(ZoneInfo("UTC"))
+    end_utc = now.astimezone(ZoneInfo("UTC"))
 
-    print(f"开始拉取时间（UTC）: {start_utc}")
-    print(f"结束拉取时间（UTC）: {end_utc}")
+    start_str = start_utc.strftime('%Y-%m-%d %H:%M:%S')
+    end_str = end_utc.strftime('%Y-%m-%d %H:%M:%S')
+
+    print(f"模拟当前时间（EST）: {now}")
+    print(f"开始拉取时间（EST）: {start_time}")
+    print(f"开始拉取时间（UTC）: {start_str}")
+    print(f"结束拉取时间（UTC）: {end_str}")
 
     df = yf.download(
         SYMBOL,
         interval="1m",
-        start=start_utc,
-        end=end_utc,
+        start=start_str,
+        end=end_str,
         progress=False,
         prepost=True,
-        auto_adjust=True
+        auto_adjust=False  # 关闭自动调整
     )
 
-    print(f"拉取数据条数: {len(df)}")
     if df.empty:
         print("数据为空")
-        return
+        return None
 
-    # 计算VWAP
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
-
-    # 计算RSI
-    df['RSI'] = compute_rsi(df['Close'])
-
-    # 保证索引为EST时区
+    print(f"拉取数据条数: {len(df)}")
+    print(f"数据索引时区（raw）: {df.index.tz}")
+    # 统一转为 EST 时区
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
+    print(f"数据索引时区（转为EST后）: {df.index.tz}")
 
-    print(f"数据索引时区: {df.index.tz}")
+    # 先看下成交量，确认非0
+    print("最近5条成交量：")
+    print(df['Volume'].tail(5))
+    # 看几列价格和成交量
     print("最近5条数据：")
-    print(df[['Open', 'High', 'Low', 'Close', 'Volume', 'VWAP', 'RSI']].tail(5))
+    print(df.tail(5)[['Open', 'High', 'Low', 'Close', 'Volume']])
+    return df
 
 if __name__ == "__main__":
-    debug_fetch_fixed_datetime()
+    get_data_debug()
 
