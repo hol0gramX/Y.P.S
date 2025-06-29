@@ -43,57 +43,58 @@ def fetch_data(start_date, end_date):
 
     df = df[~df.index.duplicated(keep='last')]
 
-    df['Vol_MA5'] = df['Volume'].rolling(5).mean()
     df['RSI'] = ta.rsi(df['Close'], length=14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
     df['MACD'] = macd['MACD_5_10_20']
     df['MACDs'] = macd['MACDs_5_10_20']
     df['MACDh'] = macd['MACDh_5_10_20']
-    df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
+    df['EMA20'] = ta.ema(df['Close'], length=20)
 
-    df.dropna(subset=['High', 'Low', 'Close', 'Volume', 'Vol_MA5', 'RSI', 'RSI_SLOPE', 'VWAP', 'MACD', 'MACDh'], inplace=True)
+    df.dropna(subset=['High', 'Low', 'Close', 'RSI', 'RSI_SLOPE', 'MACD', 'MACDh', 'EMA20'], inplace=True)
 
     return df
 
-# ========== 信号逻辑 ==========
-def strong_volume(row):
-    return row['Volume'] >= row['Vol_MA5']
-
+# ========== 判断逻辑 ==========
 def determine_strength(row, direction):
-    vwap_diff_ratio = (row['Close'] - row['VWAP']) / row['VWAP']
-    vol_strength = row['Volume'] / row['Vol_MA5'] if row['Vol_MA5'] > 0 else 1
+    ema_diff_ratio = (row['Close'] - row['EMA20']) / row['EMA20']
     rsi_slope = row.get('RSI_SLOPE', 0)
 
     if direction == "call":
-        if row['RSI'] >= 60 and row['MACDh'] > 0.3 and vwap_diff_ratio > 0.002 and vol_strength > 1.2:
+        if row['RSI'] >= 60 and row['MACDh'] > 0.3 and ema_diff_ratio > 0.002:
             return "强"
-        elif row['RSI'] >= 55 and row['MACDh'] > 0 and vwap_diff_ratio > 0 and vol_strength > 1:
+        elif row['RSI'] >= 55 and row['MACDh'] > 0 and ema_diff_ratio > 0:
             return "中"
-        elif row['RSI'] < 50 or vwap_diff_ratio < 0:
+        elif row['RSI'] < 50 or ema_diff_ratio < 0:
             return "弱"
         else:
-            if rsi_slope > 0.1 and vol_strength > 0.8:
+            if rsi_slope > 0.1:
                 return "中"
             return "弱"
 
     elif direction == "put":
-        if row['RSI'] <= 40 and row['MACDh'] < -0.3 and vwap_diff_ratio < -0.002 and vol_strength > 1.2:
+        if row['RSI'] <= 40 and row['MACDh'] < -0.3 and ema_diff_ratio < -0.002:
             return "强"
-        elif row['RSI'] <= 45 and row['MACDh'] < 0 and vwap_diff_ratio < 0 and vol_strength > 1:
+        elif row['RSI'] <= 45 and row['MACDh'] < 0 and ema_diff_ratio < 0:
             return "中"
-        elif row['RSI'] > 50 or vwap_diff_ratio > 0:
+        elif row['RSI'] > 50 or ema_diff_ratio > 0:
             return "弱"
         else:
-            if rsi_slope < -0.1 and vol_strength > 0.8:
+            if rsi_slope < -0.1:
                 return "中"
             return "弱"
 
     return "中"
 
+def check_call_entry(row):
+    return row['Close'] > row['EMA20'] and row['RSI'] > 55 and row['MACDh'] > 0
+
+def check_put_entry(row):
+    return row['Close'] < row['EMA20'] and row['RSI'] < 45 and row['MACDh'] < 0
+
 def allow_bottom_rebound_call(row, prev):
     return (
-        row['Close'] < row['VWAP'] and
+        row['Close'] < row['EMA20'] and
         row['RSI'] > prev['RSI'] and
         row['MACDh'] > prev['MACDh'] and
         row['MACD'] > -0.3
@@ -101,7 +102,7 @@ def allow_bottom_rebound_call(row, prev):
 
 def allow_top_rebound_put(row, prev):
     return (
-        row['Close'] > row['VWAP'] and
+        row['Close'] > row['EMA20'] and
         row['RSI'] < prev['RSI'] and
         row['MACDh'] < prev['MACDh'] and
         row['MACD'] < 0.3
@@ -123,27 +124,21 @@ def check_put_exit(row):
 
 def allow_call_reentry(row, prev):
     return (
-        prev['Close'] < prev['VWAP'] and
-        row['Close'] > row['VWAP'] and
+        prev['Close'] < prev['EMA20'] and
+        row['Close'] > row['EMA20'] and
         row['RSI'] > 53 and
         row['MACDh'] > 0.1
     )
 
 def allow_put_reentry(row, prev):
     return (
-        prev['Close'] > prev['VWAP'] and
-        row['Close'] < row['VWAP'] and
+        prev['Close'] > prev['EMA20'] and
+        row['Close'] < row['EMA20'] and
         row['RSI'] < 47 and
         row['MACDh'] < 0.05
     )
 
-# ========== 新增：趋势中继豁免判断 ==========
 def is_trend_continuation(row, prev, position):
-    """
-    趋势中继豁免出场判断
-    持call时，只要MACDh > 0且RSI > 45，豁免出场
-    持put时，只要MACDh < 0且RSI < 55，豁免出场
-    """
     if position == "call":
         return (row['MACDh'] > 0) and (row['RSI'] > 45)
     elif position == "put":
@@ -169,7 +164,6 @@ def backtest(start_date_str, end_date_str):
         ttime = ts.time()
 
         if not is_market_day(ts) or ttime < REGULAR_START or ttime >= REGULAR_END:
-            # 收盘强制清仓
             if ttime >= time(15, 59) and position != "none":
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ 收盘前自动清仓，状态复位")
                 position = "none"
@@ -177,7 +171,6 @@ def backtest(start_date_str, end_date_str):
 
         if position == "call":
             if check_call_exit(row):
-                # 趋势中继豁免
                 if is_trend_continuation(row, prev, position):
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）")
                 else:
@@ -192,7 +185,6 @@ def backtest(start_date_str, end_date_str):
 
         if position == "put":
             if check_put_exit(row):
-                # 趋势中继豁免
                 if is_trend_continuation(row, prev, position):
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏳ 趋势中继豁免，Put 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）")
                 else:
@@ -231,12 +223,10 @@ def backtest(start_date_str, end_date_str):
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 趋势回补 Put 再入场（{strength}）")
                 position = "put"
 
-    # 收盘强制清仓最后确认（防止最后一分钟没触发）
+    # 收盘清仓兜底
     last_ts = df.index[-1]
-    last_time = last_ts.time()
-    if last_time < REGULAR_END and position != "none":
+    if last_ts.time() < REGULAR_END and position != "none":
         signals.append(f"[{last_ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ 收盘前自动清仓，状态复位")
-        position = "none"
 
     print(f"总信号数：{len(signals)}")
     for s in signals:
@@ -244,8 +234,5 @@ def backtest(start_date_str, end_date_str):
 
 if __name__ == "__main__":
     backtest("2025-06-20", "2025-06-27")
-
-
-
 
 
