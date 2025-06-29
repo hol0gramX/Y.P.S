@@ -1,0 +1,29 @@
+name: Debug MACD and Signal
+
+on:
+  workflow_dispatch:  # 允许你手动点击触发
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: [3.11]  # 可换成你需要的 Python 版本
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install yfinance pandas pandas-ta
+
+      - name: Run debug script
+        run: |
+          python debug_macd_signal.py
