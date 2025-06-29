@@ -52,20 +52,17 @@ def fetch_data_dynamic_window(test_datetime=None):
     )
 
     if df.empty:
-        print("⚠️ yf拉取数据为空")
+        print("⚠️ 无数据")
         return None
-
-    print(f"✅ 拉取数据成功，条数: {len(df)}")
-    print("数据索引样例（前5条）：")
-    print(df.index[:5])
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
+    # 先删除基础无效行
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df = df[df["Volume"] > 0]
 
-    # 确保索引是带时区的UTC时间，转换到EST时区
+    # 转时区到EST，**注意这里不要转换成naive datetime**
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
@@ -73,17 +70,11 @@ def fetch_data_dynamic_window(test_datetime=None):
 
     print(f"df.index tzinfo (转换后): {df.index.tz}")
 
-    # 下面这部分修改，转成无时区datetime进行过滤，避免时区不匹配导致过滤空数据
-    start_time_naive = start_time.replace(tzinfo=None)
-    end_time_naive = end_time.replace(tzinfo=None)
-
-    df.index = df.index.tz_convert(None)  # 转成naive datetime索引
-
     print(f"过滤前数据条数: {len(df)}")
-    df = df[(df.index >= start_time_naive) & (df.index < end_time_naive)]
+    df = df[(df.index >= start_time) & (df.index < end_time)]
     print(f"过滤后有效数据条数: {len(df)}")
 
-    if df.empty:
+    if len(df) == 0:
         print("⚠️ 过滤后无有效数据")
         return None
 
@@ -94,13 +85,11 @@ def fetch_data_dynamic_window(test_datetime=None):
     df['VWAP'] = (df['Close'] * df['Volume']).cumsum() / df['Volume'].cumsum()
     df = compute_macd(df)
 
-    # 可能计算指标时仍会有NaN，使用ffill填充
     df.ffill(inplace=True)
-    df.dropna(subset=["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"], inplace=True)
-
-    if df.empty:
-        print("⚠️ 指标计算后无有效数据")
-        return None
+    # 确保指标列存在后再dropna，防止key error
+    required_cols = ["High", "Low", "Close", "Volume", "VWAP", "RSI", "MACD", "MACDh"]
+    exist_cols = [c for c in required_cols if c in df.columns]
+    df.dropna(subset=exist_cols, inplace=True)
 
     return df
 
@@ -115,17 +104,17 @@ def main():
         print("❌ 未获取到有效数据，退出")
         return
 
-    print(f"✅ 模拟时间点：{test_time_est.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-    print(f"数据总条数: {len(df)}")
-    print(f"起始时间: {df.index[0].strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"结束时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"✅ 拉取数据成功，条数: {len(df)}")
+    print(f"起始时间: {df.index[0].strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"结束时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
     last_row = df.iloc[-1]
     print("\n📊 9:30 时刻最新一条数据：")
-    print(f"时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"时间: {df.index[-1].strftime('%Y-%m-%d %H:%M:%S %Z')}")
     print(f"Close: {last_row['Close']:.2f} | Volume: {last_row['Volume']}")
     print(f"Vol_MA5: {last_row['Vol_MA5']:.2f} | RSI: {last_row['RSI']:.2f} | RSI_SLOPE: {last_row['RSI_SLOPE']:.3f}")
-    print(f"VWAP: {last_row['VWAP']:.2f} | MACD: {last_row['MACD']:.3f} | MACDh: {last_row['MACDh']:.3f}")
+    print(f"VWAP: {last_row['VWAP']:.2f} | MACD: {last_row.get('MACD', 0):.3f} | MACDh: {last_row.get('MACDh', 0):.3f}")
 
 if __name__ == "__main__":
     main()
+
