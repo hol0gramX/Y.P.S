@@ -1,24 +1,33 @@
-name: Debug Indicators
+name: Run Python Debug Script
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  debug:
+  run-debug-script:
     runs-on: ubuntu-latest
 
+    strategy:
+      matrix:
+        python-version: [3.11]
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Setup Python
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: |
-          pip install yfinance pandas pandas-ta pandas_market_calendars
+      - name: Install numpy 1.23.5 explicitly
+        run: pip install numpy==1.23.5
 
-      - name: Run indicator debug
+      - name: Install dependencies from requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Run debug script
         run: python debug_indicators.py
