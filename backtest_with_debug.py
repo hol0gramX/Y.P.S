@@ -1,7 +1,7 @@
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime, time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 SYMBOL = "SPY"
@@ -22,9 +22,9 @@ def compute_macd(df):
     return df
 
 def fetch_and_debug():
-    now = datetime.now(tz=EST)
-    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    end_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    # 固定历史时间，确保Yahoo有数据
+    start_time = datetime(2023, 6, 26, 4, 0, 0, tzinfo=EST)
+    end_time = datetime(2023, 6, 26, 9, 30, 0, tzinfo=EST)
 
     print(f"Fetching {SYMBOL} data from {start_time} to {end_time} (EST)")
 
@@ -44,15 +44,12 @@ def fetch_and_debug():
     if df.empty:
         raise ValueError("数据为空")
 
-    # 解决时区问题的关键点
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
 
-    print(df.head())
-
-    # 指标计算
+    # 计算指标
     df = df.dropna(subset=["High", "Low", "Close", "Volume"])
     df['EMA20'] = ta.ema(df['Close'], length=20)
     df['RSI'] = compute_rsi(df['Close'])
@@ -61,10 +58,9 @@ def fetch_and_debug():
     df.ffill(inplace=True)
     df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20"], inplace=True)
 
-    print(f"\n✅ 提取到 {len(df)} 条有效数据")
+    print(f"\n✅ 成功提取 {len(df)} 条有效数据")
     print("\n📊 最后10条数据（含指标）:")
     print(df.tail(10)[["Close", "EMA20", "RSI", "RSI_SLOPE", "MACD", "MACDh"]])
 
 if __name__ == "__main__":
     fetch_and_debug()
-
