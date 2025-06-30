@@ -13,12 +13,10 @@ nasdaq = mcal.get_calendar("NASDAQ")
 REGULAR_START = time(9, 30)
 REGULAR_END = time(16, 0)
 
-# ========== 时间工具 ==========
 def is_market_day(dt):
     sched = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
     return not sched.empty
 
-# ========== 新增：判断EMA20趋势 ==========
 def get_ema_trend(df, idx, window=5):
     if idx < window:
         return "unknown"
@@ -32,7 +30,6 @@ def get_ema_trend(df, idx, window=5):
     else:
         return "sideways"
 
-# ========== 横盘判断 + 顶部震荡识别 ==========
 def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
     price_near = abs(row['Close'] - row['EMA20']) / row['EMA20'] < price_threshold
     if idx < window:
@@ -48,7 +45,6 @@ def is_top_chop(df, idx, window=4):
     recent = df.iloc[idx - window + 1:idx + 1]
     return (recent['MACDh'].max() - recent['MACDh'].min() < 0.01) and (recent['RSI'].mean() > 60)
 
-# ========== 数据获取 ==========
 def fetch_data(start_date, end_date):
     df = yf.download(
         SYMBOL,
@@ -84,7 +80,6 @@ def fetch_data(start_date, end_date):
 
     return df
 
-# ========== 判断逻辑 ==========
 def determine_strength(row, direction):
     ema_diff_ratio = (row['Close'] - row['EMA20']) / row['EMA20']
     rsi_slope = row.get('RSI_SLOPE', 0)
@@ -117,7 +112,7 @@ def check_call_entry(row, trend):
         row['Close'] > row['EMA20'] and
         row['RSI'] > 53 and
         row['MACD'] > 0 and
-        row['MACDh'] > 0.01 and  # MACDh过滤震荡
+        row['MACDh'] > 0.01 and
         row['RSI_SLOPE'] > 0.15
     )
 
@@ -168,7 +163,6 @@ def is_trend_continuation(row, prev, position):
         return (row['MACDh'] < 0) and (row['RSI'] < 55)
     return False
 
-# ========== 回测主逻辑 ==========
 def backtest(start_date_str, end_date_str):
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
@@ -194,6 +188,7 @@ def backtest(start_date_str, end_date_str):
 
         ema_trend = get_ema_trend(df, i)
 
+        # 持仓时判断出场信号
         if position == "call":
             if check_call_exit(row):
                 if is_trend_continuation(row, prev, position):
@@ -214,9 +209,11 @@ def backtest(start_date_str, end_date_str):
                     position = "none"
             continue
 
+        # 无持仓时先过滤震荡（横盘+顶部震荡）
         if position == "none":
             if is_sideways(row, df, i) or is_top_chop(df, i):
-                continue  # 横盘 or 顶部震荡 过滤
+                # print(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 震荡区间，跳过入场")
+                continue
 
             if check_call_entry(row, ema_trend):
                 strength = determine_strength(row, "call")
@@ -235,7 +232,6 @@ def backtest(start_date_str, end_date_str):
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
                 position = "put"
 
-    # 收盘清仓兜底
     last_ts = df.index[-1]
     if last_ts.time() < REGULAR_END and position != "none":
         signals.append(f"[{last_ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ 收盘前自动清仓，状态复位")
