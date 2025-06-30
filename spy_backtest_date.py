@@ -198,4 +198,4 @@ def backtest_main_logic(start_date_str, end_date_str):
 
 # ========== 启动 ==========
 if __name__ == "__main__":
-    backtest_main_logic("2025-06-20", "2025-06-27")
+    backtest_main_logic("2025-06-23", "2025-06-24")
