@@ -114,6 +114,19 @@ def get_data():
 
     return df
 
+# ========== EMA20 过滤系统 ==========
+def get_ema_trend(df):
+    # 判断最近5根EMA20是否单调递增或递减
+    ema = df['EMA20'].tail(5)
+    increasing = all(x < y for x, y in zip(ema, ema[1:]))
+    decreasing = all(x > y for x, y in zip(ema, ema[1:]))
+    if increasing:
+        return "up"
+    elif decreasing:
+        return "down"
+    else:
+        return "sideways"
+
 # ========== 信号判断函数 ==========
 def determine_strength(row, direction):
     ema_diff_ratio = (row['Close'] - row['EMA20']) / row['EMA20']
@@ -180,6 +193,7 @@ def generate_signal(df):
     state = load_last_signal()
     pos = state.get("position", "none")
     now_time = row.name
+    ema_trend = get_ema_trend(df)
 
     if pos == "call" and check_call_exit(row):
         if is_trend_continuation(row, prev, "call"):
@@ -187,11 +201,11 @@ def generate_signal(df):
         strength = determine_strength(row, "call")
         state["position"] = "none"
         save_last_signal(state)
-        if check_put_entry(row) or allow_top_rebound_put(row, prev):
+        if check_put_entry(row) and ema_trend == "down":
             state["position"] = "put"
             strength_put = determine_strength(row, "put")
             save_last_signal(state)
-            return now_time, f"🔁 反手 Put：Call 结构破坏 + Put 入场（{strength_put}）"
+            return now_time, f"🔁 反手 Put：Call 出场 + Put 入场（{strength_put}）"
         return now_time, f"⚠️ Call 出场信号（{strength}）"
 
     elif pos == "put" and check_put_exit(row):
@@ -200,30 +214,30 @@ def generate_signal(df):
         strength = determine_strength(row, "put")
         state["position"] = "none"
         save_last_signal(state)
-        if check_call_entry(row) or allow_bottom_rebound_call(row, prev):
+        if check_call_entry(row) and ema_trend == "up":
             state["position"] = "call"
             strength_call = determine_strength(row, "call")
             save_last_signal(state)
-            return now_time, f"🔁 反手 Call：Put 结构破坏 + Call 入场（{strength_call}）"
+            return now_time, f"🔁 反手 Call：Put 出场 + Call 入场（{strength_call}）"
         return now_time, f"⚠️ Put 出场信号（{strength}）"
 
     elif pos == "none":
-        if check_call_entry(row):
+        if check_call_entry(row) and ema_trend == "up":
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
             return now_time, f"📈 主升浪 Call 入场（{strength}）"
-        elif check_put_entry(row):
+        elif check_put_entry(row) and ema_trend == "down":
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
             return now_time, f"📉 主跌浪 Put 入场（{strength}）"
-        elif allow_bottom_rebound_call(row, prev):
+        elif allow_bottom_rebound_call(row, prev) and ema_trend == "up":
             strength = determine_strength(row, "call")
             state["position"] = "call"
             save_last_signal(state)
             return now_time, f"📈 底部反弹 Call 捕捉（{strength}）"
-        elif allow_top_rebound_put(row, prev):
+        elif allow_top_rebound_put(row, prev) and ema_trend == "down":
             strength = determine_strength(row, "put")
             state["position"] = "put"
             save_last_signal(state)
@@ -269,3 +283,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
