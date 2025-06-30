@@ -155,20 +155,26 @@ def backtest(start_date_str, end_date_str):
             continue
 
         if position == "none":
-            if is_sideways(row, df, i) or is_top_chop(df, i): continue
+            if is_sideways(row, df, i) or is_top_chop(df, i):
+                # 震荡区间，跳过入场
+                continue
+
             if check_call_entry(row, ema_trend):
                 strength = determine_strength(row, "call")
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 Call 入场（{strength}）")
                 position = "call"
+
             elif check_put_entry(row, ema_trend):
                 strength = determine_strength(row, "put")
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 Put 入场（{strength}）")
                 position = "put"
-            elif allow_bottom_rebound_call(row, prev):
+
+            elif (not is_sideways(row, df, i)) and allow_bottom_rebound_call(row, prev):
                 strength = determine_strength(row, "call")
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 底部反弹 Call 捕捉（{strength}）")
                 position = "call"
-            elif allow_top_rebound_put(row, prev):
+
+            elif (not is_sideways(row, df, i)) and allow_top_rebound_put(row, prev):
                 strength = determine_strength(row, "put")
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
                 position = "put"
