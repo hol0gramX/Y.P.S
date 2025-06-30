@@ -29,21 +29,6 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
     ema_flat = abs(ema_now - ema_past) < ema_threshold
     return price_near and ema_flat
 
-# ========== 判断EMA趋势 ==========
-def get_ema_trend(df):
-    # 判断最近5根EMA20是否单调递增或递减
-    ema = df['EMA20'].tail(5)
-    if len(ema) < 5:
-        return "sideways"
-    increasing = all(x < y for x, y in zip(ema, ema[1:]))
-    decreasing = all(x > y for x, y in zip(ema, ema[1:]))
-    if increasing:
-        return "up"
-    elif decreasing:
-        return "down"
-    else:
-        return "sideways"
-
 # ========== 数据获取 ==========
 def fetch_data(start_date, end_date):
     df = yf.download(
@@ -207,28 +192,24 @@ def backtest(start_date_str, end_date_str):
             continue
 
         if position == "none":
-            ema_trend = get_ema_trend(df.iloc[:i+1])
-
-            if ema_trend != "up" and ema_trend != "down":
-                # 侧边震荡，只过滤主升浪/主跌浪入场，不过滤反弹
-                if allow_bottom_rebound_call(row, prev):
-                    strength = determine_strength(row, "call")
-                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 底部反弹 Call 捕捉（{strength}）")
-                    position = "call"
-                elif allow_top_rebound_put(row, prev):
-                    strength = determine_strength(row, "put")
-                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
-                    position = "put"
-            else:
-                # 正常趋势：允许主升浪和主跌浪入场
-                if check_call_entry(row) and ema_trend == "up":
-                    strength = determine_strength(row, "call")
-                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 主升浪 Call 入场（{strength}）")
-                    position = "call"
-                elif check_put_entry(row) and ema_trend == "down":
-                    strength = determine_strength(row, "put")
-                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 主跌浪 Put 入场（{strength}）")
-                    position = "put"
+            if is_sideways(row, df, i):
+                continue  # 横盘过滤
+            if check_call_entry(row):
+                strength = determine_strength(row, "call")
+                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 Call 入场（{strength}）")
+                position = "call"
+            elif check_put_entry(row):
+                strength = determine_strength(row, "put")
+                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 Put 入场（{strength}）")
+                position = "put"
+            elif allow_bottom_rebound_call(row, prev):
+                strength = determine_strength(row, "call")
+                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 底部反弹 Call 捕捉（{strength}）")
+                position = "call"
+            elif allow_top_rebound_put(row, prev):
+                strength = determine_strength(row, "put")
+                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
+                position = "put"
 
     # 收盘清仓兜底
     last_ts = df.index[-1]
