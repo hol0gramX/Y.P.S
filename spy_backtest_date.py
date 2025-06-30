@@ -95,45 +95,49 @@ def determine_strength(row, direction):
 def check_call_entry(row):
     return (
         row['Close'] > row['EMA20'] and
-        row['RSI'] > 51 and
+        row['RSI'] > 53 and
         row['MACD'] > 0 and
-        row['MACDh'] > -0.05  # 允许刚翻红
+        row['MACDh'] > 0 and
+        row['RSI_SLOPE'] > 0.15
     )
 
 def check_put_entry(row):
     return (
         row['Close'] < row['EMA20'] and
-        row['RSI'] < 49 and
+        row['RSI'] < 47 and
         row['MACD'] < 0 and
-        row['MACDh'] < 0.05  # 允许刚翻绿
+        row['MACDh'] < 0 and
+        row['RSI_SLOPE'] < -0.15
     )
 
 def allow_bottom_rebound_call(row, prev):
     return (
+        row['Close'] < row['EMA20'] and
         row['RSI'] > prev['RSI'] and
         row['MACDh'] > prev['MACDh'] and
-        row['MACDh'] > -0.2 and
-        row['MACD'] > -0.5
+        row['MACD'] > -0.3
     )
 
 def allow_top_rebound_put(row, prev):
     return (
+        row['Close'] > row['EMA20'] and
         row['RSI'] < prev['RSI'] and
         row['MACDh'] < prev['MACDh'] and
-        row['MACDh'] < 0.2 and
-        row['MACD'] < 0.5
+        row['MACD'] < 0.3
     )
 
 def check_call_exit(row):
     return (
-        row['RSI_SLOPE'] < -0.1 or
-        row['MACDh'] < 0
+        row['RSI'] < 50 and
+        row['RSI_SLOPE'] < 0 and
+        (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
     )
 
 def check_put_exit(row):
     return (
-        row['RSI_SLOPE'] > 0.1 or
-        row['MACDh'] > 0
+        row['RSI'] > 50 and
+        row['RSI_SLOPE'] > 0 and
+        (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
     )
 
 def is_trend_continuation(row, prev, position):
