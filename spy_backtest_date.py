@@ -54,7 +54,7 @@ def fetch_data(start_date, end_date):
     df = df[~df.index.duplicated(keep='last')]
 
     df['RSI'] = ta.rsi(df['Close'], length=14)
-    df['RSI_SLOPE'] = df['RSI'].diff(3)
+    df['RSI_SLOPE'] = df['RSI'].diff(1)  # 1分钟差分，更灵敏但更噪声
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
     df['MACD'] = macd['MACD_5_10_20']
     df['MACDs'] = macd['MACDs_5_10_20']
@@ -95,19 +95,19 @@ def determine_strength(row, direction):
 def check_call_entry(row):
     return (
         row['Close'] > row['EMA20'] and
-        row['RSI'] > 53 and
+        row['RSI'] > 51 and  # ⬇️ 从 53 降低至 51
         row['MACD'] > 0 and
         row['MACDh'] > 0 and
-        row['RSI_SLOPE'] > 0.15
+        row['RSI_SLOPE'] > 0.1  # ⬇️ 从 0.15 降低至 0.1
     )
 
 def check_put_entry(row):
     return (
         row['Close'] < row['EMA20'] and
-        row['RSI'] < 47 and
+        row['RSI'] < 49 and  # ⬆️ 从 47 放宽至 49
         row['MACD'] < 0 and
         row['MACDh'] < 0 and
-        row['RSI_SLOPE'] < -0.15
+        row['RSI_SLOPE'] < -0.1  # ⬆️ 从 -0.15 放宽至 -0.1
     )
 
 def allow_bottom_rebound_call(row, prev):
@@ -128,16 +128,16 @@ def allow_top_rebound_put(row, prev):
 
 def check_call_exit(row):
     return (
-        row['RSI'] < 50 and
+        row['RSI'] < 51 and  # ⬇️ 对应提前出场
         row['RSI_SLOPE'] < 0 and
-        (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
+        (row['MACD'] < 0.03 or row['MACDh'] < 0.03)  # ⬇️ 更灵敏阈值
     )
 
 def check_put_exit(row):
     return (
-        row['RSI'] > 50 and
+        row['RSI'] > 49 and  # ⬇️ 略提前离场，从 >50 改为 >49
         row['RSI_SLOPE'] > 0 and
-        (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
+        (row['MACD'] > -0.03 or row['MACDh'] > -0.03)  # ⬇️ 更灵敏阈值
     )
 
 def is_trend_continuation(row, prev, position):
