@@ -19,6 +19,16 @@ def is_market_day(dt):
     sched = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
     return not sched.empty
 
+# ========== 横盘判断 ==========
+def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
+    price_near = abs(row['Close'] - row['EMA20']) / row['EMA20'] < price_threshold
+    if idx < window:
+        return False
+    ema_now = row['EMA20']
+    ema_past = df.iloc[idx - window]['EMA20']
+    ema_flat = abs(ema_now - ema_past) < ema_threshold
+    return price_near and ema_flat
+
 # ========== 数据获取 ==========
 def fetch_data(start_date, end_date):
     df = yf.download(
@@ -68,9 +78,7 @@ def determine_strength(row, direction):
         elif row['RSI'] < 50 or ema_diff_ratio < 0:
             return "弱"
         else:
-            if rsi_slope > 0.1:
-                return "中"
-            return "弱"
+            return "中" if rsi_slope > 0.1 else "弱"
 
     elif direction == "put":
         if row['RSI'] <= 40 and row['MACDh'] < -0.3 and ema_diff_ratio < -0.002:
@@ -80,9 +88,7 @@ def determine_strength(row, direction):
         elif row['RSI'] > 50 or ema_diff_ratio > 0:
             return "弱"
         else:
-            if rsi_slope < -0.1:
-                return "中"
-            return "弱"
+            return "中" if rsi_slope < -0.1 else "弱"
 
     return "中"
 
@@ -186,6 +192,8 @@ def backtest(start_date_str, end_date_str):
             continue
 
         if position == "none":
+            if is_sideways(row, df, i):
+                continue  # 横盘过滤
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 Call 入场（{strength}）")
