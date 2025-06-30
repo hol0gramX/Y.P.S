@@ -36,9 +36,9 @@ def detect_choppy_segment(df, start_time, end_time, range_threshold=0.003):
         print("❌ 指定时间段没有数据。")
         return
 
-    high = segment['High'].max().item()
-    low = segment['Low'].min().item()
-    mid = segment['Close'].mean().item()
+    high = float(segment['High'].max())
+    low = float(segment['Low'].min())
+    mid = float(segment['Close'].mean())
     price_range = high - low
     range_ratio = price_range / mid
 
@@ -55,10 +55,10 @@ def detect_choppy_segment(df, start_time, end_time, range_threshold=0.003):
         try:
             print(
                 f"{timestamp.strftime('%H:%M')} | "
-                f"Price: {row['Close']:.2f} | "
-                f"EMA5: {row['EMA5']:.2f}, EMA10: {row['EMA10']:.2f}, EMA20: {row['EMA20']:.2f} | "
-                f"MACD: {row['MACD']:.4f}, Hist: {row['MACD_hist']:.4f} | "
-                f"RSI: {row['RSI']:.2f}"
+                f"Price: {float(row['Close']):.2f} | "
+                f"EMA5: {float(row['EMA5']):.2f}, EMA10: {float(row['EMA10']):.2f}, EMA20: {float(row['EMA20']):.2f} | "
+                f"MACD: {float(row['MACD']):.4f}, Hist: {float(row['MACD_hist']):.4f} | "
+                f"RSI: {float(row['RSI']):.2f}"
             )
         except Exception as e:
             print(f"{timestamp.strftime('%H:%M')} | ⚠️ 数据异常: {e}")
