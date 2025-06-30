@@ -36,20 +36,20 @@ def detect_choppy_segment(df, start_time, end_time, range_threshold=0.003):
         print("❌ 指定时间段没有数据。")
         return
 
-    high = segment['High'].max()
-    low = segment['Low'].min()
-    mid = segment['Close'].mean()
+    high = float(segment['High'].max())
+    low = float(segment['Low'].min())
+    mid = float(segment['Close'].mean())
     price_range = high - low
     range_ratio = price_range / mid
 
-    print(f"\n🔍 检测时间段: {start_time} ~ {end_time}")
+    print(f"\\n🔍 检测时间段: {start_time} ~ {end_time}")
     print(f"→ 最高: {high:.2f}, 最低: {low:.2f}, 差值: {price_range:.2f}")
     print(f"→ 区间占比: {range_ratio*100:.2f}%")
 
     if range_ratio < range_threshold:
-        print("✅ 结论：该段为典型震荡带，可过滤。\n")
+        print("✅ 结论：该段为典型震荡带，可过滤。\\n")
     else:
-        print("🚫 结论：该段波动尚可，不属于高粘合震荡。\n")
+        print("🚫 结论：该段波动尚可，不属于高粘合震荡。\\n")
 
     for timestamp, row in segment.iterrows():
         print(
