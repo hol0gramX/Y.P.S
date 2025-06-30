@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 
 def download_data():
-    # 下载 SPY 1分钟数据
-    spy = yf.download("SPY", interval="1m", start="2025-06-25", end="2025-06-26", progress=False)
-    spy = spy.tz_localize("UTC").tz_convert("America/New_York")
+    # 下载 SPY 1分钟数据，关闭自动复权，只转换时区
+    spy = yf.download("SPY", interval="1m", start="2025-06-25", end="2025-06-26", progress=False, auto_adjust=False)
+    spy = spy.tz_convert("America/New_York")
     return spy
 
 def calculate_indicators(df):
@@ -51,7 +51,6 @@ def detect_choppy_segment(df, start_time, end_time, range_threshold=0.003):
     else:
         print("🚫 结论：该段波动尚可，不属于高粘合震荡。\n")
 
-    # 控制台输出每一分钟的关键指标
     for timestamp, row in segment.iterrows():
         print(
             f"{timestamp.strftime('%H:%M')} | "
@@ -65,7 +64,6 @@ def main():
     df = download_data()
     df = calculate_indicators(df)
 
-    # 时间段设置（美东时间）
     start_str = "2025-06-25 11:50"
     end_str = "2025-06-25 12:44"
     start_time = pd.to_datetime(start_str).tz_localize("America/New_York")
