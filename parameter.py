@@ -1,18 +1,14 @@
 import yfinance as yf
 import pandas_ta as ta
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 
 target_date = "2025-07-01"
-start_time = "09:55:00"
-end_time = "09:56:00"
-
-# 构造时间对象（带时区）
-start_dt = datetime.strptime(f"{target_date} {start_time}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=EST)
-end_dt = datetime.strptime(f"{target_date} {end_time}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=EST)
+start_dt = datetime.strptime(f"{target_date} 04:00:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=EST)
+end_dt = datetime.strptime(f"{target_date} 09:56:00", "%Y-%m-%d %H:%M:%S").replace(tzinfo=EST)
 
 # 转换为UTC无时区（yfinance要求）
 start_utc = start_dt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
@@ -58,4 +54,6 @@ df = compute_macd(df)
 df.ffill(inplace=True)
 df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20"], inplace=True)
 
-print(df)
+# 打印9:55和9:56对应的行
+print(df.loc[(df.index.time == time(9,55)) | (df.index.time == time(9,56))])
+
