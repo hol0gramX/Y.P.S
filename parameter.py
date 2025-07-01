@@ -22,7 +22,7 @@ df = yf.download(
     end=end_utc,
     progress=False,
     auto_adjust=True,
-    prepost=False
+    prepost=True
 )
 
 # 转换为东部时间
