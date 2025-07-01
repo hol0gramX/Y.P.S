@@ -39,7 +39,6 @@ if df.index.tz is None:
 else:
     df.index = df.index.tz_convert(EST)
 
-# 计算指标函数
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
@@ -66,10 +65,13 @@ df['RSI_SLOPE'] = df['RSI'].diff(3)
 df['EMA20'] = ta.ema(df['Close'], length=20)
 df = compute_macd(df)
 
-# 向前填充缺失指标，丢弃还缺失重要指标的行
 df.ffill(inplace=True)
 df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20"], inplace=True)
 
-# 只打印9:55和9:56这两分钟的所有指标和价格，方便调参
-print(df.loc[(df.index.time == time(9,55)) | (df.index.time == time(9,56))])
+# 打印列名，确认全部指标列都存在
+print("全部列名:", df.columns.tolist())
+
+# 只打印9:55和9:56这两分钟的所有指标和价格，且完整展开，不折叠
+subset = df.loc[(df.index.time == time(9,55)) | (df.index.time == time(9,56))]
+print(subset.to_string())
 
