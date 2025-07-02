@@ -192,6 +192,20 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
+    # ✅ 新增：持仓状态下，优先检测强烈反转机会
+    if pos == "call" and allow_top_rebound_put(row, prev):
+        state["position"] = "put"
+        save_last_signal(state)
+        strength = determine_strength(row, "put")
+        return row.name, f"🔁 强势反转 Call → Put（顶部反转 Put 捕捉，{strength}）"
+
+    elif pos == "put" and allow_bottom_rebound_call(row, prev):
+        state["position"] = "call"
+        save_last_signal(state)
+        strength = determine_strength(row, "call")
+        return row.name, f"🔁 强势反转 Put → Call（底部反弹 Call 捕捉，{strength}）"
+
+    # 原有出场判断逻辑
     if pos == "call" and check_call_exit(row):
         if is_trend_continuation(row, prev, "call"):
             return row.name, f"⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
@@ -220,7 +234,6 @@ def generate_signal(df):
 
     elif pos == "none":
         if sideways:
-            # 震荡带只允许反弹捕捉入场
             if allow_bottom_rebound_call(row, prev):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
@@ -232,7 +245,6 @@ def generate_signal(df):
                 save_last_signal(state)
                 return row.name, f"📉 顶部反转 Put 捕捉（{strength}）"
         else:
-            # 非震荡带，允许主升浪/主跌浪入场
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
