@@ -193,13 +193,13 @@ def generate_signal(df):
     sideways = is_sideways(row, df, idx)
 
     # ✅ 加入动能竭尽判断后才允许反向入场
-    if pos == "call" and allow_top_rebound_put(row, prev) and row['RSI'] < 55 and row['MACDh'] < 0.1:
+    if pos == "call" and allow_top_rebound_put(row, prev) and row['RSI_SLOPE'] < -2 and row['MACDh'] < 0.1:
         state["position"] = "put"
         save_last_signal(state)
         strength = determine_strength(row, "put")
         return row.name, f"🔁 动能竭尽，转向 Put（顶部回落捕捉，{strength}）"
 
-    elif pos == "put" and allow_bottom_rebound_call(row, prev) and row['RSI'] > 45 and row['MACDh'] > -0.1:
+    elif pos == "put" and allow_bottom_rebound_call(row, prev) row['RSI_SLOPE'] > 2 and row['MACDh'] > -0.1:
         state["position"] = "call"
         save_last_signal(state)
         strength = determine_strength(row, "call")
