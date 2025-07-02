@@ -199,7 +199,7 @@ def generate_signal(df):
         strength = determine_strength(row, "put")
         return row.name, f"🔁 动能竭尽，转向 Put（顶部回落捕捉，{strength}）"
 
-    elif pos == "put" and allow_bottom_rebound_call(row, prev) row['RSI_SLOPE'] > 2 and row['MACDh'] > -0.1:
+    elif pos == "put" and allow_bottom_rebound_call(row, prev) and row['RSI_SLOPE'] > 2 and row['MACDh'] > -0.1:
         state["position"] = "call"
         save_last_signal(state)
         strength = determine_strength(row, "call")
