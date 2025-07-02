@@ -181,13 +181,13 @@ def backtest(start_date_str, end_date_str):
             continue
 
         # 持仓状态优先判断强势反转换仓（动能竭尽后允许反转）
-        if position == "call" and allow_top_rebound_put(row, prev) and row['RSI'] < 55 and row['MACDh'] < 0.1:
+        if position == "call" and allow_top_rebound_put(row, prev) and row['RSI_SLOPE'] < -2 and row['MACDh'] < 0.1:
             strength = determine_strength(row, "put")
             signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 动能竭尽，转向 Put（顶部回落捕捉，{strength}）")
             position = "put"
             continue
 
-        if position == "put" and allow_bottom_rebound_call(row, prev) and row['RSI'] > 45 and row['MACDh'] > -0.1:
+        if position == "put" and allow_bottom_rebound_call(row, prev) and row['RSI_SLOPE'] > 2 and row['MACDh'] > -0.1:
             strength = determine_strength(row, "call")
             signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 动能竭尽，转向 Call（底部企稳捕捉，{strength}）")
             position = "call"
