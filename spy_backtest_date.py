@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
 
-# ========== 配置 ==========
+# ==== 配置 ====
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
 nasdaq = mcal.get_calendar("NASDAQ")
@@ -14,23 +14,39 @@ nasdaq = mcal.get_calendar("NASDAQ")
 REGULAR_START = time(9, 30)
 REGULAR_END = time(16, 0)
 
-# ========== 时间工具 ==========
+# ==== 时间工具 ====
 def is_market_day(dt):
     sched = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
     return not sched.empty
 
-# ========== 横盘判断 ==========
+# ==== 震荡带判断 ====
 def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
-    price_near = abs(row['Close'] - row['EMA20']) / row['EMA20'] < price_threshold
     if idx < window:
         return False
+    price_near = abs(row['Close'] - row['EMA20']) / row['EMA20'] < price_threshold
     ema_now = row['EMA20']
     ema_past = df.iloc[idx - window]['EMA20']
     ema_flat = abs(ema_now - ema_past) < ema_threshold
     return price_near and ema_flat
 
-# ========== 数据获取 ==========
+# ==== 技术指标计算 ====
+def compute_rsi(series, length=14):
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    rs = up.rolling(length).mean() / down.rolling(length).mean()
+    return (100 - 100 / (1 + rs)).fillna(50)
+
+def compute_macd(df):
+    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
+    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
+    return df
+
+# ==== 数据拉取 ====
 def fetch_data(start_date, end_date):
+    # 拉取包含盘前盘后1分钟数据，转为EST时区，计算指标
     df = yf.download(
         SYMBOL,
         start=start_date,
@@ -45,27 +61,21 @@ def fetch_data(start_date, end_date):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df.index.name = "Datetime"
-
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
-
     df = df[~df.index.duplicated(keep='last')]
 
-    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['RSI'] = compute_rsi(df['Close'], length=14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
-    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd['MACD_5_10_20']
-    df['MACDs'] = macd['MACDs_5_10_20']
-    df['MACDh'] = macd['MACDh_5_10_20']
     df['EMA20'] = ta.ema(df['Close'], length=20)
+    df = compute_macd(df)
 
     df.dropna(subset=['High', 'Low', 'Close', 'RSI', 'RSI_SLOPE', 'MACD', 'MACDh', 'EMA20'], inplace=True)
-
     return df
 
-# ========== 判断逻辑 ==========
+# ==== 判断逻辑 ====
 def determine_strength(row, direction):
     ema_diff_ratio = (row['Close'] - row['EMA20']) / row['EMA20']
     rsi_slope = row.get('RSI_SLOPE', 0)
@@ -89,7 +99,6 @@ def determine_strength(row, direction):
             return "弱"
         else:
             return "中" if rsi_slope < -0.1 else "弱"
-
     return "中"
 
 def check_call_entry(row):
@@ -147,7 +156,7 @@ def is_trend_continuation(row, prev, position):
         return (row['MACDh'] < 0) and (row['RSI'] < 55)
     return False
 
-# ========== 回测主逻辑 ==========
+# ==== 回测主逻辑 ====
 def backtest(start_date_str, end_date_str):
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
     end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
@@ -166,11 +175,26 @@ def backtest(start_date_str, end_date_str):
         ttime = ts.time()
 
         if not is_market_day(ts) or ttime < REGULAR_START or ttime >= REGULAR_END:
+            # 收盘前自动清仓兜底
             if ttime >= time(15, 59) and position != "none":
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ 收盘前自动清仓，状态复位")
                 position = "none"
             continue
 
+        # 持仓状态优先判断强势反转换仓
+        if position == "call" and allow_top_rebound_put(row, prev):
+            strength = determine_strength(row, "put")
+            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 强势反转 Call → Put（顶部反转 Put 捕捉，{strength}）")
+            position = "put"
+            continue
+
+        if position == "put" and allow_bottom_rebound_call(row, prev):
+            strength = determine_strength(row, "call")
+            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 强势反转 Put → Call（底部反弹 Call 捕捉，{strength}）")
+            position = "call"
+            continue
+
+        # 出场判断及反手
         if position == "call":
             if check_call_exit(row):
                 if is_trend_continuation(row, prev, position):
@@ -179,6 +203,11 @@ def backtest(start_date_str, end_date_str):
                     strength = determine_strength(row, "call")
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Call 出场信号（{strength}）")
                     position = "none"
+                    # 出场后反手入场
+                    if check_put_entry(row) and not is_sideways(row, df, i):
+                        strength_put = determine_strength(row, "put")
+                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Put：Call 出场 + Put 入场（{strength_put}）")
+                        position = "put"
             continue
 
         if position == "put":
@@ -189,18 +218,24 @@ def backtest(start_date_str, end_date_str):
                     strength = determine_strength(row, "put")
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Put 出场信号（{strength}）")
                     position = "none"
+                    # 出场后反手入场
+                    if check_call_entry(row) and not is_sideways(row, df, i):
+                        strength_call = determine_strength(row, "call")
+                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Call：Put 出场 + Call 入场（{strength_call}）")
+                        position = "call"
             continue
 
+        # 空仓入场逻辑
         if position == "none":
             if is_sideways(row, df, i):
-                continue  # 横盘过滤
+                continue
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 Call 入场（{strength}）")
+                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 主升浪 Call 入场（{strength}）")
                 position = "call"
             elif check_put_entry(row):
                 strength = determine_strength(row, "put")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 Put 入场（{strength}）")
+                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 主跌浪 Put 入场（{strength}）")
                 position = "put"
             elif allow_bottom_rebound_call(row, prev):
                 strength = determine_strength(row, "call")
@@ -211,7 +246,7 @@ def backtest(start_date_str, end_date_str):
                 signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
                 position = "put"
 
-    # 收盘清仓兜底
+    # 收盘前最后一次清仓兜底
     last_ts = df.index[-1]
     if last_ts.time() < REGULAR_END and position != "none":
         signals.append(f"[{last_ts.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ 收盘前自动清仓，状态复位")
@@ -221,4 +256,5 @@ def backtest(start_date_str, end_date_str):
         print(s)
 
 if __name__ == "__main__":
-    backtest("2025-06-30", "2025-06-30")
+    backtest("2025-07-02", "2025-07-02")
+
