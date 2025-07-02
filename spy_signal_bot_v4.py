@@ -244,6 +244,7 @@ def generate_signal(df):
                 save_last_signal(state)
                 return row.name, f"📉 顶部反转 Put 捕捉（{strength}）"
         else:
+            # ✅ 先判断主趋势信号
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
@@ -254,6 +255,17 @@ def generate_signal(df):
                 state["position"] = "put"
                 save_last_signal(state)
                 return row.name, f"📉 主跌浪 Put 入场（{strength}）"
+            # ✅ 如果主趋势没命中，继续判断反弹信号
+            elif allow_bottom_rebound_call(row, prev):
+                strength = determine_strength(row, "call")
+                state["position"] = "call"
+                save_last_signal(state)
+                return row.name, f"📈 趋势中底部反弹 Call 捕捉（{strength}）"
+            elif allow_top_rebound_put(row, prev):
+                strength = determine_strength(row, "put")
+                state["position"] = "put"
+                save_last_signal(state)
+                return row.name, f"📉 趋势中顶部回落 Put 捕捉（{strength}）"
 
     return None, None
 
