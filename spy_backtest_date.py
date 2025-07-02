@@ -46,7 +46,6 @@ def compute_macd(df):
 
 # ==== 数据拉取 ====
 def fetch_data(start_date, end_date):
-    # 拉取包含盘前盘后1分钟数据，转为EST时区，计算指标
     df = yf.download(
         SYMBOL,
         start=start_date,
@@ -181,16 +180,16 @@ def backtest(start_date_str, end_date_str):
                 position = "none"
             continue
 
-        # 持仓状态优先判断强势反转换仓
-        if position == "call" and allow_top_rebound_put(row, prev):
+        # 持仓状态优先判断强势反转换仓（动能竭尽后允许反转）
+        if position == "call" and allow_top_rebound_put(row, prev) and row['RSI'] < 55 and row['MACDh'] < 0.1:
             strength = determine_strength(row, "put")
-            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 强势反转 Call → Put（顶部反转 Put 捕捉，{strength}）")
+            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 动能竭尽，转向 Put（顶部回落捕捉，{strength}）")
             position = "put"
             continue
 
-        if position == "put" and allow_bottom_rebound_call(row, prev):
+        if position == "put" and allow_bottom_rebound_call(row, prev) and row['RSI'] > 45 and row['MACDh'] > -0.1:
             strength = determine_strength(row, "call")
-            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 强势反转 Put → Call（底部反弹 Call 捕捉，{strength}）")
+            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 动能竭尽，转向 Call（底部企稳捕捉，{strength}）")
             position = "call"
             continue
 
@@ -203,12 +202,18 @@ def backtest(start_date_str, end_date_str):
                     strength = determine_strength(row, "call")
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Call 出场信号（{strength}）")
                     position = "none"
-                    # 出场后反手入场
+                    # 出场后反手入场，非震荡时允许反弹入场
                     if check_put_entry(row) and not is_sideways(row, df, i):
                         strength_put = determine_strength(row, "put")
                         signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Put：Call 出场 + Put 入场（{strength_put}）")
                         position = "put"
-            continue
+                    else:
+                        # 如果反手入场条件不满足，先判断反弹入场信号（非震荡才判断）
+                        if not is_sideways(row, df, i) and allow_bottom_rebound_call(row, prev):
+                            strength_rebound = determine_strength(row, "call")
+                            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 趋势中底部反弹 Call 捕捉（{strength_rebound}）")
+                            position = "call"
+                continue
 
         if position == "put":
             if check_put_exit(row):
@@ -218,33 +223,51 @@ def backtest(start_date_str, end_date_str):
                     strength = determine_strength(row, "put")
                     signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ Put 出场信号（{strength}）")
                     position = "none"
-                    # 出场后反手入场
+                    # 出场后反手入场，非震荡时允许反弹入场
                     if check_call_entry(row) and not is_sideways(row, df, i):
                         strength_call = determine_strength(row, "call")
                         signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 🔁 反手 Call：Put 出场 + Call 入场（{strength_call}）")
                         position = "call"
-            continue
+                    else:
+                        # 如果反手入场条件不满足，先判断反弹入场信号（非震荡才判断）
+                        if not is_sideways(row, df, i) and allow_top_rebound_put(row, prev):
+                            strength_rebound = determine_strength(row, "put")
+                            signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 趋势中顶部回落 Put 捕捉（{strength_rebound}）")
+                            position = "put"
+                continue
 
         # 空仓入场逻辑
         if position == "none":
             if is_sideways(row, df, i):
-                continue
-            if check_call_entry(row):
-                strength = determine_strength(row, "call")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 主升浪 Call 入场（{strength}）")
-                position = "call"
-            elif check_put_entry(row):
-                strength = determine_strength(row, "put")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 主跌浪 Put 入场（{strength}）")
-                position = "put"
-            elif allow_bottom_rebound_call(row, prev):
-                strength = determine_strength(row, "call")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 底部反弹 Call 捕捉（{strength}）")
-                position = "call"
-            elif allow_top_rebound_put(row, prev):
-                strength = determine_strength(row, "put")
-                signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部反转 Put 捕捉（{strength}）")
-                position = "put"
+                # 震荡时只判断反弹信号
+                if allow_bottom_rebound_call(row, prev):
+                    strength = determine_strength(row, "call")
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 底部反弹 Call 捕捉（{strength}）")
+                    position = "call"
+                elif allow_top_rebound_put(row, prev):
+                    strength = determine_strength(row, "put")
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 顶部回落 Put 捕捉（{strength}）")
+                    position = "put"
+            else:
+                # 非震荡时先判断主趋势信号
+                if check_call_entry(row):
+                    strength = determine_strength(row, "call")
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 主升浪 Call 入场（{strength}）")
+                    position = "call"
+                elif check_put_entry(row):
+                    strength = determine_strength(row, "put")
+                    signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 主跌浪 Put 入场（{strength}）")
+                    position = "put"
+                else:
+                    # 主趋势未命中，继续判断反弹信号
+                    if allow_bottom_rebound_call(row, prev):
+                        strength = determine_strength(row, "call")
+                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📈 趋势中底部反弹 Call 捕捉（{strength}）")
+                        position = "call"
+                    elif allow_top_rebound_put(row, prev):
+                        strength = determine_strength(row, "put")
+                        signals.append(f"[{ts.strftime('%Y-%m-%d %H:%M:%S')}] 📉 趋势中顶部回落 Put 捕捉（{strength}）")
+                        position = "put"
 
     # 收盘前最后一次清仓兜底
     last_ts = df.index[-1]
@@ -257,4 +280,5 @@ def backtest(start_date_str, end_date_str):
 
 if __name__ == "__main__":
     backtest("2025-07-01", "2025-07-01")
+
 
