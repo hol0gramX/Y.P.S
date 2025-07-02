@@ -192,20 +192,19 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    # ✅ 新增：持仓状态下，优先检测强烈反转机会
-    if pos == "call" and allow_top_rebound_put(row, prev):
+    # ✅ 加入动能竭尽判断后才允许反向入场
+    if pos == "call" and allow_top_rebound_put(row, prev) and row['RSI'] < 55 and row['MACDh'] < 0.1:
         state["position"] = "put"
         save_last_signal(state)
         strength = determine_strength(row, "put")
-        return row.name, f"🔁 强势反转 Call → Put（顶部反转 Put 捕捉，{strength}）"
+        return row.name, f"🔁 动能竭尽，转向 Put（顶部回落捕捉，{strength}）"
 
-    elif pos == "put" and allow_bottom_rebound_call(row, prev):
+    elif pos == "put" and allow_bottom_rebound_call(row, prev) and row['RSI'] > 45 and row['MACDh'] > -0.1:
         state["position"] = "call"
         save_last_signal(state)
         strength = determine_strength(row, "call")
-        return row.name, f"🔁 强势反转 Put → Call（底部反弹 Call 捕捉，{strength}）"
+        return row.name, f"🔁 动能竭尽，转向 Call（底部企稳捕捉，{strength}）"
 
-    # 原有出场判断逻辑
     if pos == "call" and check_call_exit(row):
         if is_trend_continuation(row, prev, "call"):
             return row.name, f"⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
