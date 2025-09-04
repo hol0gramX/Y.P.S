@@ -124,36 +124,9 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
     ema_flat = abs(ema_now - ema_past) < ema_threshold
     return price_near and ema_flat
 
-# ========== 信号判断函数 ==========
+# ========== 信号判断函数（去掉强中弱） ==========
 def determine_strength(row, direction):
-    ema_diff_ratio = (row['Close'] - row['EMA20']) / row['EMA20']
-    rsi_slope = row.get('RSI_SLOPE', 0)
-
-    if direction == "call":
-        if row['RSI'] >= 60 and row['MACDh'] > 0.3 and ema_diff_ratio > 0.002:
-            return "强"
-        elif row['RSI'] >= 55 and row['MACDh'] > 0 and ema_diff_ratio > 0:
-            return "中"
-        elif row['RSI'] < 50 or ema_diff_ratio < 0:
-            return "弱"
-        else:
-            if rsi_slope > 0.1:
-                return "中"
-            return "弱"
-
-    elif direction == "put":
-        if row['RSI'] <= 40 and row['MACDh'] < -0.3 and ema_diff_ratio < -0.002:
-            return "强"
-        elif row['RSI'] <= 45 and row['MACDh'] < 0 and ema_diff_ratio < 0:
-            return "中"
-        elif row['RSI'] > 50 or ema_diff_ratio > 0:
-            return "弱"
-        else:
-            if rsi_slope < -0.1:
-                return "中"
-            return "弱"
-
-    return "中"
+    return ""
 
 def check_call_entry(row):
     return row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
@@ -244,7 +217,6 @@ def generate_signal(df):
                 save_last_signal(state)
                 return row.name, f"📉 顶部反转 Put 捕捉（{strength}）"
         else:
-            # ✅ 先判断主趋势信号
             if check_call_entry(row):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
@@ -255,7 +227,6 @@ def generate_signal(df):
                 state["position"] = "put"
                 save_last_signal(state)
                 return row.name, f"📉 主跌浪 Put 入场（{strength}）"
-            # ✅ 如果主趋势没命中，继续判断反弹信号
             elif allow_bottom_rebound_call(row, prev):
                 strength = determine_strength(row, "call")
                 state["position"] = "call"
