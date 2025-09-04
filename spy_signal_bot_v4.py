@@ -108,11 +108,20 @@ def get_data():
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['EMA20'] = ta.ema(df['Close'], length=20)
+    df['EMA50'] = ta.ema(df['Close'], length=50)
+    df['EMA200'] = ta.ema(df['Close'], length=200)
     df = compute_macd(df)
     df.ffill(inplace=True)
-    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20"], inplace=True)
+    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20", "EMA50", "EMA200"], inplace=True)
 
     return df
+
+# ========== 趋势判断 ==========
+def is_trend_up(df, idx):
+    return df['EMA50'].iloc[idx] > df['EMA200'].iloc[idx]
+
+def is_trend_down(df, idx):
+    return df['EMA50'].iloc[idx] < df['EMA200'].iloc[idx]
 
 # ========== 震荡带判断 ==========
 def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
@@ -124,7 +133,7 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
     ema_flat = abs(ema_now - ema_past) < ema_threshold
     return price_near and ema_flat
 
-# ========== 信号判断函数（去掉强中弱） ==========
+# ========== 信号判断 ==========
 def determine_strength(row, direction):
     return ""
 
@@ -165,78 +174,67 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    # ✅ 加入动能竭尽判断后才允许反向入场
+    # 动能竭尽反手入场
     if pos == "call" and allow_top_rebound_put(row, prev) and row['RSI_SLOPE'] < -2 and row['MACDh'] < 0.1:
         state["position"] = "put"
         save_last_signal(state)
-        strength = determine_strength(row, "put")
-        return row.name, f"🔁 动能竭尽，转向 Put（顶部回落捕捉，{strength}）"
-
+        return row.name, f"🔁 动能竭尽，转向 Put（顶部回落捕捉）"
     elif pos == "put" and allow_bottom_rebound_call(row, prev) and row['RSI_SLOPE'] > 2 and row['MACDh'] > -0.1:
         state["position"] = "call"
         save_last_signal(state)
-        strength = determine_strength(row, "call")
-        return row.name, f"🔁 动能竭尽，转向 Call（底部企稳捕捉，{strength}）"
+        return row.name, f"🔁 动能竭尽，转向 Call（底部企稳捕捉）"
 
+    # 出场逻辑
     if pos == "call" and check_call_exit(row):
         if is_trend_continuation(row, prev, "call"):
-            return row.name, f"⏳ 趋势中继豁免，Call 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
-        strength = determine_strength(row, "call")
+            return row.name, f"⏳ 趋势中继豁免，Call 持仓不出场"
         state["position"] = "none"
         save_last_signal(state)
         if check_put_entry(row) and not sideways:
             state["position"] = "put"
-            strength_put = determine_strength(row, "put")
             save_last_signal(state)
-            return row.name, f"🔁 反手 Put：Call 出场 + Put 入场（{strength_put}）"
-        return row.name, f"⚠️ Call 出场信号（{strength}）"
+            return row.name, f"🔁 反手 Put：Call 出场 + Put 入场"
+        return row.name, f"⚠️ Call 出场信号"
 
     elif pos == "put" and check_put_exit(row):
         if is_trend_continuation(row, prev, "put"):
-            return row.name, f"⏳ 趋势中继豁免，Put 持仓不出场（RSI={row['RSI']:.1f}, MACDh={row['MACDh']:.3f}）"
-        strength = determine_strength(row, "put")
+            return row.name, f"⏳ 趋势中继豁免，Put 持仓不出场"
         state["position"] = "none"
         save_last_signal(state)
         if check_call_entry(row) and not sideways:
             state["position"] = "call"
-            strength_call = determine_strength(row, "call")
             save_last_signal(state)
-            return row.name, f"🔁 反手 Call：Put 出场 + Call 入场（{strength_call}）"
-        return row.name, f"⚠️ Put 出场信号（{strength}）"
+            return row.name, f"🔁 反手 Call：Put 出场 + Call 入场"
+        return row.name, f"⚠️ Put 出场信号"
 
+    # 无持仓逻辑（加入趋势过滤）
     elif pos == "none":
         if sideways:
             if allow_bottom_rebound_call(row, prev):
-                strength = determine_strength(row, "call")
                 state["position"] = "call"
                 save_last_signal(state)
-                return row.name, f"📈 底部反弹 Call 捕捉（{strength}）"
+                return row.name, f"📈 底部反弹 Call 捕捉"
             elif allow_top_rebound_put(row, prev):
-                strength = determine_strength(row, "put")
                 state["position"] = "put"
                 save_last_signal(state)
-                return row.name, f"📉 顶部反转 Put 捕捉（{strength}）"
+                return row.name, f"📉 顶部反转 Put 捕捉"
         else:
-            if check_call_entry(row):
-                strength = determine_strength(row, "call")
+            if is_trend_up(df, idx) and check_call_entry(row):
                 state["position"] = "call"
                 save_last_signal(state)
-                return row.name, f"📈 主升浪 Call 入场（{strength}）"
-            elif check_put_entry(row):
-                strength = determine_strength(row, "put")
+                return row.name, f"📈 主升浪 Call 入场（顺势）"
+            elif is_trend_down(df, idx) and check_put_entry(row):
                 state["position"] = "put"
                 save_last_signal(state)
-                return row.name, f"📉 主跌浪 Put 入场（{strength}）"
+                return row.name, f"📉 主跌浪 Put 入场（顺势）"
             elif allow_bottom_rebound_call(row, prev):
-                strength = determine_strength(row, "call")
                 state["position"] = "call"
                 save_last_signal(state)
-                return row.name, f"📈 趋势中底部反弹 Call 捕捉（{strength}）"
+                return row.name, f"📈 趋势中底部反弹 Call 捕捉"
             elif allow_top_rebound_put(row, prev):
-                strength = determine_strength(row, "put")
                 state["position"] = "put"
                 save_last_signal(state)
-                return row.name, f"📉 趋势中顶部回落 Put 捕捉（{strength}）"
+                return row.name, f"📉 趋势中顶部回落 Put 捕捉"
 
     return None, None
 
@@ -278,3 +276,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
