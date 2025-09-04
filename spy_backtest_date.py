@@ -279,6 +279,6 @@ def backtest(start_date_str, end_date_str):
         print(s)
 
 if __name__ == "__main__":
-    backtest("2025-07-01", "2025-07-01")
+    backtest("2025-09-03", "2025-09-03")
 
 
