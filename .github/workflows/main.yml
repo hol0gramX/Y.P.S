@@ -1,7 +1,7 @@
-# name: Run SPY Signal Every Minute (Market Hours Only)
+ name: Run SPY Signal Every Minute (Market Hours Only)
 
-# on:
-#  workflow_dispatch:
+ on:
+  workflow_dispatch:
 
 jobs:
   run-script:
