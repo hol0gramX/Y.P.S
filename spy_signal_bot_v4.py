@@ -22,7 +22,10 @@ def load_last_signal_from_gist():
     if not GIST_TOKEN:
         return {"position": "none"}
     try:
-        r = requests.get(f"https://api.github.com/gists/{GIST_ID}", headers={"Authorization": f"token {GIST_TOKEN}"})
+        r = requests.get(
+            f"https://api.github.com/gists/{GIST_ID}",
+            headers={"Authorization": f"token {GIST_TOKEN}"}
+        )
         content = r.json()["files"][GIST_FILENAME]["content"]
         return json.loads(content)
     except:
@@ -31,7 +34,10 @@ def load_last_signal_from_gist():
 def save_last_signal(state):
     if not GIST_TOKEN:
         return
-    headers = {"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github.v3+json"}
+    headers = {
+        "Authorization": f"token {GIST_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
     data = {"files": {GIST_FILENAME: {"content": json.dumps(state)}}}
     requests.patch(f"https://api.github.com/gists/{GIST_ID}", headers=headers, json=data)
 
@@ -75,24 +81,23 @@ def compute_macd(df):
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
+def compute_kdj(df, length=9, signal=3):
+    kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=length, d=signal, smooth_k=signal)
+    df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
+    df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
+    return df
+
 # ========== 数据拉取 ==========
 def get_data():
     now = get_est_now()
     start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
-
     start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     end_utc = now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
     df = yf.download(
-        SYMBOL,
-        interval="1m",
-        start=start_utc,
-        end=end_utc,
-        progress=False,
-        prepost=True,
-        auto_adjust=True
+        SYMBOL, interval="1m", start=start_utc, end=end_utc,
+        progress=False, prepost=True, auto_adjust=True
     )
-
     if df.empty:
         raise ValueError("数据为空")
 
@@ -100,6 +105,7 @@ def get_data():
         df.columns = df.columns.get_level_values(0)
 
     df = df.dropna(subset=["High", "Low", "Close"])
+
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
@@ -111,9 +117,10 @@ def get_data():
     df['EMA50'] = ta.ema(df['Close'], length=50)
     df['EMA200'] = ta.ema(df['Close'], length=200)
     df = compute_macd(df)
-    df.ffill(inplace=True)
-    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20", "EMA50", "EMA200"], inplace=True)
+    df = compute_kdj(df)
 
+    df.ffill(inplace=True)
+    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20", "EMA50", "EMA200", "K", "D"], inplace=True)
     return df
 
 # ========== 趋势判断 ==========
@@ -134,26 +141,31 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
     return price_near and ema_flat
 
 # ========== 信号判断 ==========
-def determine_strength(row, direction):
-    return ""
-
 def check_call_entry(row):
-    return row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
+    return (row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
+            and row['K'] > row['D'])  # KDJ 金叉确认
 
 def check_put_entry(row):
-    return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
+    return (row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
+            and row['K'] < row['D'])  # KDJ 死叉确认
 
 def allow_bottom_rebound_call(row, prev):
-    return row['Close'] < row['EMA20'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3
+    return (row['Close'] < row['EMA20'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3
+            and row['K'] > row['D'])  # 必须金叉
 
 def allow_top_rebound_put(row, prev):
-    return row['Close'] > row['EMA20'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3
+    return (row['Close'] > row['EMA20'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3
+            and row['K'] < row['D'])  # 必须死叉
 
 def check_call_exit(row):
-    return row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
+    exit_cond = row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
+    strong_kdj = row['K'] > row['D']  # 趋势豁免：金叉未破
+    return exit_cond and not strong_kdj
 
 def check_put_exit(row):
-    return row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
+    exit_cond = row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
+    strong_kdj = row['K'] < row['D']  # 趋势豁免：死叉未破
+    return exit_cond and not strong_kdj
 
 def is_trend_continuation(row, prev, position):
     if position == "call":
@@ -207,7 +219,7 @@ def generate_signal(df):
             return row.name, f"🔁 反手 Call：Put 出场 + Call 入场"
         return row.name, f"⚠️ Put 出场信号"
 
-    # 无持仓逻辑（加入趋势过滤）
+    # 无持仓逻辑
     elif pos == "none":
         if sideways:
             if allow_bottom_rebound_call(row, prev):
@@ -251,7 +263,6 @@ def main():
         now = get_est_now()
         print("=" * 60)
         print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-
         force_clear_at_close()
 
         state = load_last_signal()
@@ -270,10 +281,8 @@ def main():
             send_to_discord(msg)
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
-
     except Exception as e:
         print("[错误]", e)
 
 if __name__ == "__main__":
     main()
-
