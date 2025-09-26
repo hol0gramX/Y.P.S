@@ -24,8 +24,7 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          # 使用 PyPI 稳定版 pandas-ta 避免 git clone 出错
-          pip install pandas-ta==0.3.21b0
+          pip install pandas-ta==0.3.19b0
           pip install -r requirements.txt
 
       - name: 执行回测脚本
