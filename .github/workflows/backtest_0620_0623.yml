@@ -6,14 +6,14 @@ on:
     paths:
       - 'spy_backtest_date.py'
       - 'requirements.txt'
-      - '.github/workflows/backtest_0620_0623.yml'
+      - '.github/workflows/backtest.yml'
 
 jobs:
   backtest:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 设置 Python 版本（改为 3.10）
+      - name: 设置 Python 版本
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
