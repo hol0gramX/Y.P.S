@@ -13,13 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 设置 Python 版本（3.11 兼容 numpy 1.23.5）
+      - name: 设置 Python 环境
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.11"   # 可以用 3.11 或 3.12
 
       - name: 检出代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: 安装依赖
         run: |
@@ -28,6 +28,7 @@ jobs:
 
       - name: 执行回测脚本
         run: python spy_backtest_date.py
+
 
 
 
