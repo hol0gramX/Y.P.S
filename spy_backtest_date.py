@@ -28,15 +28,15 @@ def compute_rsi(series, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd.iloc[:,0].fillna(0)
-    df['MACDs'] = macd.iloc[:,1].fillna(0)
-    df['MACDh'] = macd.iloc[:,2].fillna(0)
+    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
 def compute_kdj(df, length=9, signal=3):
     kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=length, d=signal, smooth_k=signal)
-    df['K'] = kdj.iloc[:,0].fillna(50)
-    df['D'] = kdj.iloc[:,1].fillna(50)
+    df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
+    df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
     return df
 
 # ==== 数据拉取 ====
