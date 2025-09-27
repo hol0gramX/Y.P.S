@@ -4,6 +4,8 @@ import yfinance as yf
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
+import requests
+import time as tm
 
 # ==== 配置 ====
 SYMBOL = "SPY"
@@ -44,39 +46,50 @@ def compute_kdj(df, length=9, signal=3):
     d = k.ewm(alpha=1/signal, adjust=False).mean()
     return k.fillna(50), d.fillna(50)
 
-# ==== 数据拉取 ====
-def fetch_data(start_date, end_date):
-    df = yf.download(
-        SYMBOL,
-        start=start_date,
-        end=end_date + timedelta(days=1),
-        interval="1m",
-        prepost=True,
-        progress=False,
-        auto_adjust=True,
-    )
-    if df.empty:
-        raise ValueError("无数据")
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.index.name = "Datetime"
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC").tz_convert(EST)
-    else:
-        df.index = df.index.tz_convert(EST)
-    df = df[~df.index.duplicated(keep='last')]
+# ==== 安全数据拉取 ====
+def fetch_data(start_date, end_date, retries=3, pause=5):
+    last_exception = None
+    for attempt in range(1, retries + 1):
+        try:
+            df = yf.download(
+                SYMBOL,
+                start=start_date,
+                end=end_date + timedelta(days=1),
+                interval="1m",
+                prepost=True,
+                progress=False,
+                auto_adjust=True,
+            )
+            if df.empty:
+                raise ValueError("yfinance 返回空数据")
+            
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.index.name = "Datetime"
+            if df.index.tz is None:
+                df.index = df.index.tz_localize("UTC").tz_convert(EST)
+            else:
+                df.index = df.index.tz_convert(EST)
+            df = df[~df.index.duplicated(keep='last')]
 
-    # 指标计算
-    df['EMA20'] = compute_ema(df['Close'], 20)
-    df['EMA50'] = compute_ema(df['Close'], 50)
-    df['EMA200'] = compute_ema(df['Close'], 200)
-    df['RSI'] = compute_rsi(df['Close'], 14)
-    df['RSI_SLOPE'] = df['RSI'].diff(3)
-    df['MACD'], df['MACDs'], df['MACDh'] = compute_macd(df['Close'], 5, 10, 20)
-    df['K'], df['D'] = compute_kdj(df)
+            # 指标计算
+            df['EMA20'] = compute_ema(df['Close'], 20)
+            df['EMA50'] = compute_ema(df['Close'], 50)
+            df['EMA200'] = compute_ema(df['Close'], 200)
+            df['RSI'] = compute_rsi(df['Close'], 14)
+            df['RSI_SLOPE'] = df['RSI'].diff(3)
+            df['MACD'], df['MACDs'], df['MACDh'] = compute_macd(df['Close'], 5, 10, 20)
+            df['K'], df['D'] = compute_kdj(df)
+            
+            df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','EMA50','EMA200','K','D'], inplace=True)
+            return df
+
+        except (requests.exceptions.RequestException, ValueError) as e:
+            last_exception = e
+            print(f"[WARN] 第 {attempt} 次尝试拉取数据失败: {e}")
+            tm.sleep(pause)
     
-    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','EMA50','EMA200','K','D'], inplace=True)
-    return df
+    raise RuntimeError(f"多次尝试获取数据失败，最终错误: {last_exception}")
 
 # ==== 趋势判断 ====
 def is_trend_up(df, idx): return df['EMA50'].iloc[idx] > df['EMA200'].iloc[idx]
@@ -180,6 +193,7 @@ def backtest(start_date_str, end_date_str):
     print(f"总信号数：{len(signals)}")
     for s in signals: print(s)
 
+# ==== 主入口 ====
 if __name__=="__main__":
     backtest("2025-09-25","2025-09-26")
 
