@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 设置 Python 版本（3.11 兼容 numpy 1.23.5）
+      - name: 设置 Python 版本
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.09"
 
       - name: 检出代码
         uses: actions/checkout@v3
