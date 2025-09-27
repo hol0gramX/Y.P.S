@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 import yfinance as yf
-import pandas_ta as ta
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
@@ -19,6 +18,9 @@ def is_market_day(dt):
     return not sched.empty
 
 # ==== 技术指标 ====
+def compute_ema(series, length):
+    return series.ewm(span=length, adjust=False).mean()
+
 def compute_rsi(series, length=14):
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -26,18 +28,21 @@ def compute_rsi(series, length=14):
     rs = up.rolling(length).mean() / down.rolling(length).mean()
     return (100 - 100 / (1 + rs)).fillna(50)
 
-def compute_macd(df):
-    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
-    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
-    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
-    return df
+def compute_macd(series, fast=5, slow=10, signal=20):
+    ema_fast = compute_ema(series, fast)
+    ema_slow = compute_ema(series, slow)
+    macd_line = ema_fast - ema_slow
+    signal_line = compute_ema(macd_line, signal)
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
 
 def compute_kdj(df, length=9, signal=3):
-    kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=length, d=signal, smooth_k=signal)
-    df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
-    df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
-    return df
+    low_min = df['Low'].rolling(length).min()
+    high_max = df['High'].rolling(length).max()
+    rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
+    k = rsv.ewm(alpha=1/signal, adjust=False).mean()
+    d = k.ewm(alpha=1/signal, adjust=False).mean()
+    return k.fillna(50), d.fillna(50)
 
 # ==== 数据拉取 ====
 def fetch_data(start_date, end_date):
@@ -62,14 +67,14 @@ def fetch_data(start_date, end_date):
     df = df[~df.index.duplicated(keep='last')]
 
     # 指标计算
-    df['RSI'] = compute_rsi(df['Close'], length=14)
+    df['EMA20'] = compute_ema(df['Close'], 20)
+    df['EMA50'] = compute_ema(df['Close'], 50)
+    df['EMA200'] = compute_ema(df['Close'], 200)
+    df['RSI'] = compute_rsi(df['Close'], 14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
-    df['EMA20'] = ta.ema(df['Close'], length=20)
-    df['EMA50'] = ta.ema(df['Close'], length=50)
-    df['EMA200'] = ta.ema(df['Close'], length=200)
-    df = compute_macd(df)
-    df = compute_kdj(df)
-
+    df['MACD'], df['MACDs'], df['MACDh'] = compute_macd(df['Close'], 5, 10, 20)
+    df['K'], df['D'] = compute_kdj(df)
+    
     df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','EMA50','EMA200','K','D'], inplace=True)
     return df
 
@@ -102,15 +107,13 @@ def allow_top_rebound_put(row, prev):
 
 def check_call_exit(row): 
     if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
-        if row['K']>row['D']:   # 金叉保持 → 豁免
-            return False
+        if row['K']>row['D']: return False
         return True
     return False
 
 def check_put_exit(row): 
     if row['RSI']>50 and row['RSI_SLOPE']>0 and (row['MACD']>-0.05 or row['MACDh']>-0.05):
-        if row['K']<row['D']:   # 死叉保持 → 豁免
-            return False
+        if row['K']<row['D']: return False
         return True
     return False
 
@@ -179,6 +182,7 @@ def backtest(start_date_str, end_date_str):
 
 if __name__=="__main__":
     backtest("2025-09-03","2025-09-03")
+
 
 
 
