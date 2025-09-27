@@ -13,21 +13,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
       - name: 设置 Python 版本
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 检出代码
-        uses: actions/checkout@v3
-
       - name: 安装依赖
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install git+https://github.com/twopirllc/pandas-ta.git
 
       - name: 执行回测脚本
         run: python spy_backtest_20250620_0623.py
