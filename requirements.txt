@@ -1,9 +1,15 @@
 numpy==1.23.5
 pandas==2.3.2
-pandas_market_calendars==5.1.1
 yfinance==0.2.66
+pandas_ta==0.3.21b0
+pandas_market_calendars==5.1.1
 requests==2.32.5
-pandas-ta-remake  
+python-dateutil>=2.8.2
+pytz>=2020.1
+tzdata>=2022.7
+multitasking>=0.0.7
+beautifulsoup4>=4.11.1
+
 
 
 
