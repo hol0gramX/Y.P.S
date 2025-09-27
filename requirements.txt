@@ -1,9 +1,10 @@
 numpy>=1.24
 pandas>=1.5
 pandas_market_calendars
-pandas_ta
+pandas_ta==0.3.14b0
 yfinance
 requests
+
 
 
 
