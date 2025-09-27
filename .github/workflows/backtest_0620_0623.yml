@@ -27,7 +27,11 @@ jobs:
           pip install -r requirements.txt
 
       - name: 执行回测脚本
-        run: python spy_backtest_date.py
+        run: |
+          echo "已安装包版本："
+          pip list
+          python spy_backtest_date.py
+
 
 
 
