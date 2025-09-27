@@ -1,0 +1,26 @@
+name: Troubleshoot SPY Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'spy_backtest_date.py'
+      - 'requirements.txt'
+      - 'troubleshoot/run_backtest.py'
+      - '.github/workflows/backtest_troubleshoot.yml'
+
+jobs:
+  troubleshoot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: 运行 Troubleshoot 回测
+        run: python troubleshoot/run_backtest.py
