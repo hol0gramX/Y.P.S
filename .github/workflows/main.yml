@@ -1,6 +1,6 @@
- name: Run SPY Signal Every Minute (Market Hours Only)
+name: Run SPY Signal Every Minute (Market Hours Only)
 
- on:
+on:
   workflow_dispatch:
 
 jobs:
@@ -38,4 +38,3 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: python spy_signal_bot_v4.py
-
