@@ -23,12 +23,14 @@ jobs:
 
       - name: 安装依赖
         run: |
+          sudo apt-get update
+          sudo apt-get install -y git
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pandas-ta==0.3.14b0
-
+          pip install git+https://github.com/twopirllc/pandas-ta.git
 
       - name: 执行回测脚本
-        run: python spy_backtest_date.py
+        run: python spy_backtest_20250620_0623.py
+
 
 
