@@ -1,9 +1,10 @@
-numpy
+numpy>=1.23
 pandas==2.2.3
-yfinance
-requests
-pandas_market_calendars
-pandas-ta-remake
+yfinance>=0.2.66
+requests>=2.32
+pandas_market_calendars>=5.1
+pandas-ta-remake==1.0.4
+
 
 
 
