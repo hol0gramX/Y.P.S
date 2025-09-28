@@ -31,6 +31,10 @@ def compute_macd(df):
     df['MACD'] = macd['MACD_5_10_20'].fillna(0)
     df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
+    # 判断金叉死叉
+    df['MACD_cross'] = 0  # 1 金叉, -1 死叉, 0 无
+    df.loc[(df['MACD'] > df['MACDs']) & (df['MACD'].shift(1) <= df['MACDs'].shift(1)), 'MACD_cross'] = 1
+    df.loc[(df['MACD'] < df['MACDs']) & (df['MACD'].shift(1) >= df['MACDs'].shift(1)), 'MACD_cross'] = -1
     return df
 
 def compute_kdj(df, length=9, signal=3):
@@ -87,19 +91,35 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
     ema_flat = abs(ema_now - ema_past) < ema_threshold
     return price_near and ema_flat
 
-# ==== 信号判断 ====
-def check_call_entry(row): 
-    return row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD']>0 and row['MACDh']>0 and row['RSI_SLOPE']>0.15 and row['K']>row['D']
+# ==== 入场信号升级 ====
+def check_call_entry(row, prev):
+    # 1️⃣ MACD 金叉 + 柱子放大 + 零轴上方
+    macd_ok = row['MACD_cross'] == 1 and row['MACDh'] > 0
+    zero_ok = row['MACD'] > 0
+    trend_ok = row['EMA50'] > row['EMA200']
+    # 2️⃣ 原 RSI + KDJ 辅助
+    rsi_ok = row['RSI'] > 53 and row['RSI_SLOPE'] > 0
+    kdj_ok = row['K'] > row['D']
+    return macd_ok and zero_ok and trend_ok and rsi_ok and kdj_ok
 
-def check_put_entry(row): 
-    return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD']<0 and row['MACDh']<0 and row['RSI_SLOPE']<-0.15 and row['K']<row['D']
+def check_put_entry(row, prev):
+    # 1️⃣ MACD 死叉 + 柱子放大 + 零轴下方
+    macd_ok = row['MACD_cross'] == -1 and row['MACDh'] < 0
+    zero_ok = row['MACD'] < 0
+    trend_ok = row['EMA50'] < row['EMA200']
+    # 2️⃣ 原 RSI + KDJ 辅助
+    rsi_ok = row['RSI'] < 47 and row['RSI_SLOPE'] < 0
+    kdj_ok = row['K'] < row['D']
+    return macd_ok and zero_ok and trend_ok and rsi_ok and kdj_ok
 
+# ==== 趋势中反弹允许开仓（保留原逻辑） ====
 def allow_bottom_rebound_call(row, prev): 
     return row['Close'] < row['EMA20'] and row['RSI']>prev['RSI'] and row['MACDh']>prev['MACDh'] and row['MACD']>-0.3 and row['K']>row['D']
 
 def allow_top_rebound_put(row, prev): 
     return row['Close'] > row['EMA20'] and row['RSI']<prev['RSI'] and row['MACDh']<prev['MACDh'] and row['MACD']<0.3 and row['K']<row['D']
 
+# ==== 出场逻辑保持原样 ====
 def check_call_exit(row): 
     if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
         if row['K']>row['D']:   # 金叉保持 → 豁免
@@ -148,15 +168,15 @@ def backtest(start_date_str, end_date_str):
             signals.append(f"[{ts}] 🔁 Put -> Call")
             position="call"; continue
 
-        # 出场及反手
+        # 出场及反手（保持原逻辑）
         if position=="call" and check_call_exit(row):
             signals.append(f"[{ts}] ⚠️ Call 出场"); position="none"
-            if check_put_entry(row) and not is_sideways(row,df,i): 
+            if check_put_entry(row,prev) and not is_sideways(row,df,i): 
                 signals.append(f"[{ts}] 🔁 空仓 -> Put"); position="put"
             continue
         if position=="put" and check_put_exit(row):
             signals.append(f"[{ts}] ⚠️ Put 出场"); position="none"
-            if check_call_entry(row) and not is_sideways(row,df,i): 
+            if check_call_entry(row,prev) and not is_sideways(row,df,i): 
                 signals.append(f"[{ts}] 🔁 空仓 -> Call"); position="call"
             continue
 
@@ -166,8 +186,8 @@ def backtest(start_date_str, end_date_str):
                 if allow_bottom_rebound_call(row,prev): signals.append(f"[{ts}] 📈 底部反弹 Call"); position="call"
                 elif allow_top_rebound_put(row,prev): signals.append(f"[{ts}] 📉 顶部回落 Put"); position="put"
             else:
-                if check_call_entry(row): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
-                elif check_put_entry(row): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
+                if check_call_entry(row,prev): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
+                elif check_put_entry(row,prev): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
                 elif allow_bottom_rebound_call(row,prev): signals.append(f"[{ts}] 📈 趋势中底部反弹 Call"); position="call"
                 elif allow_top_rebound_put(row,prev): signals.append(f"[{ts}] 📉 趋势中顶部回落 Put"); position="put"
 
@@ -179,7 +199,6 @@ def backtest(start_date_str, end_date_str):
 
 if __name__=="__main__":
     backtest("2025-09-25","2025-09-26")
-
 
 
 
