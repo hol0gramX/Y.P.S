@@ -148,13 +148,18 @@ def backtest(start_date_str, end_date_str):
             signals.append(f"[{ts}] 🔁 Put -> Call")
             position="call"; continue
 
-        # 出场及反手
+        # 出场及反手（加入趋势中继）
         if position=="call" and check_call_exit(row):
+            if is_trend_continuation(row, prev, "call"):
+                continue
             signals.append(f"[{ts}] ⚠️ Call 出场"); position="none"
             if check_put_entry(row) and not is_sideways(row,df,i): 
                 signals.append(f"[{ts}] 🔁 空仓 -> Put"); position="put"
             continue
+
         if position=="put" and check_put_exit(row):
+            if is_trend_continuation(row, prev, "put"):
+                continue
             signals.append(f"[{ts}] ⚠️ Put 出场"); position="none"
             if check_call_entry(row) and not is_sideways(row,df,i): 
                 signals.append(f"[{ts}] 🔁 空仓 -> Call"); position="call"
@@ -179,11 +184,6 @@ def backtest(start_date_str, end_date_str):
 
 if __name__=="__main__":
     backtest("2025-09-25","2025-09-26")
-
-
-
-
-
 
 
 
