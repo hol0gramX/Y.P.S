@@ -198,8 +198,6 @@ def generate_signal(df):
 
     # 出场逻辑
     if pos == "call" and check_call_exit(row):
-        if is_trend_continuation(row, prev, "call"):
-            return row.name, f"⏳ 趋势中继豁免，Call 持仓不出场"
         state["position"] = "none"
         save_last_signal(state)
         if check_put_entry(row) and not sideways:
@@ -209,8 +207,6 @@ def generate_signal(df):
         return row.name, f"⚠️ Call 出场信号"
 
     elif pos == "put" and check_put_exit(row):
-        if is_trend_continuation(row, prev, "put"):
-            return row.name, f"⏳ 趋势中继豁免，Put 持仓不出场"
         state["position"] = "none"
         save_last_signal(state)
         if check_call_entry(row) and not sideways:
