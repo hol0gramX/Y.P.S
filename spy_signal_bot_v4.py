@@ -196,24 +196,28 @@ def generate_signal(df):
         save_last_signal(state)
         return row.name, f"🔁 动能竭尽，转向 Call（底部企稳捕捉）"
 
-    # 出场逻辑
+ # 出场及反手（与回测逻辑一致）
     if pos == "call" and check_call_exit(row):
+        if is_trend_continuation(row, prev, "call"):
+            return None, None
         state["position"] = "none"
         save_last_signal(state)
         if check_put_entry(row) and not sideways:
             state["position"] = "put"
             save_last_signal(state)
-            return row.name, f"🔁 反手 Put：Call 出场 + Put 入场"
-        return row.name, f"⚠️ Call 出场信号"
+            return row.name, f"🔁 空仓 -> Put"
+        return row.name, f"⚠️ Call 出场"
 
     elif pos == "put" and check_put_exit(row):
+        if is_trend_continuation(row, prev, "put"):
+            return None, None
         state["position"] = "none"
         save_last_signal(state)
         if check_call_entry(row) and not sideways:
             state["position"] = "call"
             save_last_signal(state)
-            return row.name, f"🔁 反手 Call：Put 出场 + Call 入场"
-        return row.name, f"⚠️ Put 出场信号"
+            return row.name, f"🔁 空仓 -> Call"
+        return row.name, f"⚠️ Put 出场"
 
     # 无持仓逻辑
     elif pos == "none":
