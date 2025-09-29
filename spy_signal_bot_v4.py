@@ -196,65 +196,54 @@ def generate_signal(df):
         save_last_signal(state)
         return row.name, f"🔁 动能竭尽，转向 Call（底部企稳捕捉）"
 
-# 出场及反手
-msgs = []
-
-if pos == "call" and check_call_exit(row):
-    if is_trend_continuation(row, prev, "call"):
-        pass
-    else:
-        msgs.append("⚠️ Call 出场")
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_put_entry(row) and not sideways:
-            msgs.append("🔁 空仓 -> Put")
-            state["position"] = "put"
+    # 出场及反手逻辑
+    if pos == "call" and check_call_exit(row):
+        if not is_trend_continuation(row, prev, "call"):
+            state["position"] = "none"
             save_last_signal(state)
-
-elif pos == "put" and check_put_exit(row):
-    if is_trend_continuation(row, prev, "put"):
-        pass
-    else:
-        msgs.append("⚠️ Put 出场")
-        state["position"] = "none"
-        save_last_signal(state)
-        if check_call_entry(row) and not sideways:
-            msgs.append("🔁 空仓 -> Call")
-            state["position"] = "call"
+            if check_put_entry(row) and not sideways:
+                state["position"] = "put"
+                save_last_signal(state)
+                return row.name, "🔁 空仓 -> Put"
+    elif pos == "put" and check_put_exit(row):
+        if not is_trend_continuation(row, prev, "put"):
+            state["position"] = "none"
             save_last_signal(state)
+            if check_call_entry(row) and not sideways:
+                state["position"] = "call"
+                save_last_signal(state)
+                return row.name, "🔁 空仓 -> Call"
 
-elif pos == "none":
     # 无持仓逻辑
-    if sideways:
-        if allow_bottom_rebound_call(row, prev):
-            state["position"] = "call"
-            save_last_signal(state)
-            return row.name, f"📈 底部反弹 Call 捕捉"
-        elif allow_top_rebound_put(row, prev):
-            state["position"] = "put"
-            save_last_signal(state)
-            return row.name, f"📉 顶部反转 Put 捕捉"
-    else:
-        if is_trend_up(df, idx) and check_call_entry(row):
-            state["position"] = "call"
-            save_last_signal(state)
-            return row.name, f"📈 主升浪 Call 入场（顺势）"
-        elif is_trend_down(df, idx) and check_put_entry(row):
-            state["position"] = "put"
-            save_last_signal(state)
-            return row.name, f"📉 主跌浪 Put 入场（顺势）"
-        elif allow_bottom_rebound_call(row, prev):
-            state["position"] = "call"
-            save_last_signal(state)
-            return row.name, f"📈 趋势中底部反弹 Call 捕捉"
-        elif allow_top_rebound_put(row, prev):
-            state["position"] = "put"
-            save_last_signal(state)
-            return row.name, f"📉 趋势中顶部回落 Put 捕捉"
-
+    elif pos == "none":
+        if sideways:
+            if allow_bottom_rebound_call(row, prev):
+                state["position"] = "call"
+                save_last_signal(state)
+                return row.name, f"📈 底部反弹 Call 捕捉"
+            elif allow_top_rebound_put(row, prev):
+                state["position"] = "put"
+                save_last_signal(state)
+                return row.name, f"📉 顶部反转 Put 捕捉"
+        else:
+            if is_trend_up(df, idx) and check_call_entry(row):
+                state["position"] = "call"
+                save_last_signal(state)
+                return row.name, f"📈 主升浪 Call 入场（顺势）"
+            elif is_trend_down(df, idx) and check_put_entry(row):
+                state["position"] = "put"
+                save_last_signal(state)
+                return row.name, f"📉 主跌浪 Put 入场（顺势）"
+            elif allow_bottom_rebound_call(row, prev):
+                state["position"] = "call"
+                save_last_signal(state)
+                return row.name, f"📈 趋势中底部反弹 Call 捕捉"
+            elif allow_top_rebound_put(row, prev):
+                state["position"] = "put"
+                save_last_signal(state)
+                return row.name, f"📉 趋势中顶部回落 Put 捕捉"
 
     return None, None
-
 # ========== 通知 ==========
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
