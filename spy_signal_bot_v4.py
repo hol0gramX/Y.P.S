@@ -186,16 +186,6 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    # 动能竭尽反手入场
-    if pos == "call" and allow_top_rebound_put(row, prev) and row['RSI_SLOPE'] < -2 and row['MACDh'] < 0.1:
-        state["position"] = "put"
-        save_last_signal(state)
-        return row.name, f"🔁 动能竭尽，转向 Put（顶部回落捕捉）"
-    elif pos == "put" and allow_bottom_rebound_call(row, prev) and row['RSI_SLOPE'] > 2 and row['MACDh'] > -0.1:
-        state["position"] = "call"
-        save_last_signal(state)
-        return row.name, f"🔁 动能竭尽，转向 Call（底部企稳捕捉）"
-
 # ========== 出场及反手逻辑 ==========
 if position == "call" and check_call_exit(row):
     if is_trend_continuation(row, prev, "call"):
