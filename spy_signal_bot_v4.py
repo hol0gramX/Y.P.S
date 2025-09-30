@@ -244,7 +244,7 @@ elif pos == "put":
                 return row.name, f"📉 趋势中顶部回落 Put 捕捉"
 
     if signals:
-        return row.name, " | ".join(signals)
+        return None, " | ".join(signals)
 
     return None, None
 # ========== 通知 ==========
@@ -273,11 +273,15 @@ def main():
         df = get_data()
         time_signal, signal = generate_signal(df)
         if signal:
-            msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
+            if time_signal:  # 开仓逻辑（pos == "none"）
+                msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
+            else:  # 出场/反手逻辑，signal 里已带时间戳
+                msg = signal
             print(msg)
             send_to_discord(msg)
         else:
             print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ❎ 无交易信号")
+
     except Exception as e:
         print("[错误]", e)
 
