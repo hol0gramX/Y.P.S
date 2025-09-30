@@ -101,14 +101,14 @@ def allow_top_rebound_put(row, prev):
     return row['Close'] > row['EMA20'] and row['RSI']<prev['RSI'] and row['MACDh']<prev['MACDh'] and row['MACD']<0.3 and row['K']<row['D']
 
 def check_call_exit(row): 
-    if row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
+    if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
         if row['K']>row['D']:   # 金叉保持 → 豁免
             return False
         return True
     return False
 
 def check_put_exit(row): 
-    if row['RSI_SLOPE']>0 and (row['MACD']>-0.05 or row['MACDh']>-0.05):
+    if row['RSI']>50 and row['RSI_SLOPE']>0 and (row['MACD']>-0.05 or row['MACDh']>-0.05):
         if row['K']<row['D']:   # 死叉保持 → 豁免
             return False
         return True
@@ -176,7 +176,6 @@ def backtest(start_date_str, end_date_str):
 
 if __name__=="__main__":
     backtest("2025-09-25","2025-09-25")
-
 
 
 
