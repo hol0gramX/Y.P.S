@@ -186,64 +186,55 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    signals = []  # 收集可能的多个消息（例如：先出场再反手）
+    signals = []  # 初始化信号列表
 
-    # 1) 有 Call 仓位：检查出场 & 反手
-    if pos == "call":
-        if check_call_exit(row):
-            if not is_trend_continuation(row, prev, "call"):
-                state["position"] = "none"
-                save_last_signal(state)
-                signals.append(f"[{row.name}] ⏹ Call 出场")
+    # ========== 出场及反手逻辑 ==========
+    if pos == "call" and check_call_exit(row):
+        if not is_trend_continuation(row, prev, "call"):
+            signals.append(f"[{row.name}] ⏹ Call 出场")
+            state["position"] = "none"
 
-                if check_put_entry(row) and not sideways:
-                    state["position"] = "put"
-                    save_last_signal(state)
-                    signals.append(f"[{row.name}] 🔁 反手 Put 入场")
+            # 反手 Put
+            if check_put_entry(row) and not sideways:
+                state["position"] = "put"
+                signals.append(f"[{row.name}] 🔁 反手 Put 入场")
 
-    # 2) 有 Put 仓位：检查出场 & 反手
-    elif pos == "put":
-        if check_put_exit(row):
-            if not is_trend_continuation(row, prev, "put"):
-                state["position"] = "none"
-                save_last_signal(state)
-                signals.append(f"[{row.name}] ⏹ Put 出场")
+    elif pos == "put" and check_put_exit(row):
+        if not is_trend_continuation(row, prev, "put"):
+            signals.append(f"[{row.name}] ⏹ Put 出场")
+            state["position"] = "none"
 
-                if check_call_entry(row) and not sideways:
-                    state["position"] = "call"
-                    save_last_signal(state)
-                    signals.append(f"[{row.name}] 🔁 反手 Call 入场")
+            # 反手 Call
+            if check_call_entry(row) and not sideways:
+                state["position"] = "call"
+                signals.append(f"[{row.name}] 🔁 反手 Call 入场")
 
-    # 3) 空仓：只有 pos == "none" 时才评估开仓
+    # ========== 无持仓逻辑 ==========
     elif pos == "none":
         if sideways:
             if allow_bottom_rebound_call(row, prev):
                 state["position"] = "call"
-                save_last_signal(state)
-                return row.name, f"📈 底部反弹 Call 捕捉"
+                signals.append(f"[{row.name}] 📈 底部反弹 Call 捕捉")
             elif allow_top_rebound_put(row, prev):
                 state["position"] = "put"
-                save_last_signal(state)
-                return row.name, f"📉 顶部反转 Put 捕捉"
+                signals.append(f"[{row.name}] 📉 顶部反转 Put 捕捉")
         else:
             if is_trend_up(df, idx) and check_call_entry(row):
                 state["position"] = "call"
-                save_last_signal(state)
-                return row.name, f"📈 主升浪 Call 入场（顺势）"
+                signals.append(f"[{row.name}] 📈 主升浪 Call 入场（顺势）")
             elif is_trend_down(df, idx) and check_put_entry(row):
                 state["position"] = "put"
-                save_last_signal(state)
-                return row.name, f"📉 主跌浪 Put 入场（顺势）"
+                signals.append(f"[{row.name}] 📉 主跌浪 Put 入场（顺势）")
             elif allow_bottom_rebound_call(row, prev):
                 state["position"] = "call"
-                save_last_signal(state)
-                return row.name, f"📈 趋势中底部反弹 Call 捕捉"
+                signals.append(f"[{row.name}] 📈 趋势中底部反弹 Call 捕捉")
             elif allow_top_rebound_put(row, prev):
                 state["position"] = "put"
-                save_last_signal(state)
-                return row.name, f"📉 趋势中顶部回落 Put 捕捉"
+                signals.append(f"[{row.name}] 📉 趋势中顶部回落 Put 捕捉")
 
+    # ========== 仓位变化才保存 ==========
     if signals:
+        save_last_signal(state)  # 仓位变化时写入 Gist
         return row.name, " | ".join(signals)
 
     return None, None
