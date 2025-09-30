@@ -140,14 +140,6 @@ def backtest(start_date_str, end_date_str):
                 position="none"
             continue
 
-        # 持仓处理
-        if position=="call" and allow_top_rebound_put(row,prev) and row['RSI_SLOPE']<-2 and row['MACDh']<0.1:
-            signals.append(f"[{ts}] 🔁 Call -> Put")
-            position="put"; continue
-        if position=="put" and allow_bottom_rebound_call(row,prev) and row['RSI_SLOPE']>2 and row['MACDh']>-0.1:
-            signals.append(f"[{ts}] 🔁 Put -> Call")
-            position="call"; continue
-
         # 出场及反手（加入趋势中继）
         if position=="call" and check_call_exit(row):
             if is_trend_continuation(row, prev, "call"):
