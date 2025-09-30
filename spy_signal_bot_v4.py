@@ -187,31 +187,31 @@ def generate_signal(df):
     sideways = is_sideways(row, df, idx)
 
 # ========== 出场及反手逻辑 ==========
-if position == "call" and check_call_exit(row):
-    if is_trend_continuation(row, prev, "call"):
-        pass
-    else:
+if pos == "call" and check_call_exit(row):
+    if not is_trend_continuation(row, prev, "call"):
         # 出场
-        position = None
-        signals.append(f"[{idx}] ⏹ Call 出场")
+        state["position"] = "none"
+        save_last_signal(state)
+        signals.append(f"[{row.name}] ⏹ Call 出场")
+
         # 反手 Put
         if check_put_entry(row) and not sideways:
-            position = "put"
-            entry_price = row["close"]
-            signals.append(f"[{idx}] 🔁 反手 Put 入场 @ {entry_price:.2f}")
+            state["position"] = "put"
+            save_last_signal(state)
+            signals.append(f"[{row.name}] 🔁 反手 Put 入场")
 
-elif position == "put" and check_put_exit(row):
-    if is_trend_continuation(row, prev, "put"):
-        pass
-    else:
+elif pos == "put" and check_put_exit(row):
+    if not is_trend_continuation(row, prev, "put"):
         # 出场
-        position = None
-        signals.append(f"[{idx}] ⏹ Put 出场")
+        state["position"] = "none"
+        save_last_signal(state)
+        signals.append(f"[{row.name}] ⏹ Put 出场")
+
         # 反手 Call
         if check_call_entry(row) and not sideways:
-            position = "call"
-            entry_price = row["close"]
-            signals.append(f"[{idx}] 🔁 反手 Call 入场 @ {entry_price:.2f}")
+            state["position"] = "call"
+            save_last_signal(state)
+            signals.append(f"[{row.name}] 🔁 反手 Call 入场")
 
     # 无持仓逻辑
     elif pos == "none":
