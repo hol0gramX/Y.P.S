@@ -175,7 +175,7 @@ def backtest(start_date_str, end_date_str):
     for s in signals: print(s)
 
 if __name__=="__main__":
-    backtest("2025-09-25","2025-09-25")
+    backtest("2025-09-29","2025-09-29")
 
 
 
