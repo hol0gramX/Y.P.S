@@ -186,33 +186,33 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    signals = []  # 收集可能的多个消息（例如：先出场再反手）
+signals = []  # 收集可能的多个消息（例如：先出场再反手）
 
-    # 1) 有 Call 仓位：检查出场 & 反手
-    if pos == "call":
-        if check_call_exit(row):
-            if not is_trend_continuation(row, prev, "call"):
-                state["position"] = "none"
+# 1) 有 Call 仓位：检查出场 & 反手
+if pos == "call":
+    if check_call_exit(row):
+        if not is_trend_continuation(row, prev, "call"):
+            state["position"] = "none"
+            save_last_signal(state)
+            signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Call 出场")
+
+            if check_put_entry(row) and not sideways:
+                state["position"] = "put"
                 save_last_signal(state)
-                signals.append(f"[{row.name}] ⏹ Call 出场")
+                signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🔁 反手 Put 入场")
 
-                if check_put_entry(row) and not sideways:
-                    state["position"] = "put"
-                    save_last_signal(state)
-                    signals.append(f"[{row.name}] 🔁 反手 Put 入场")
+# 2) 有 Put 仓位：检查出场 & 反手
+elif pos == "put":
+    if check_put_exit(row):
+        if not is_trend_continuation(row, prev, "put"):
+            state["position"] = "none"
+            save_last_signal(state)
+            signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Put 出场")
 
-    # 2) 有 Put 仓位：检查出场 & 反手
-    elif pos == "put":
-        if check_put_exit(row):
-            if not is_trend_continuation(row, prev, "put"):
-                state["position"] = "none"
+            if check_call_entry(row) and not sideways:
+                state["position"] = "call"
                 save_last_signal(state)
-                signals.append(f"[{row.name}] ⏹ Put 出场")
-
-                if check_call_entry(row) and not sideways:
-                    state["position"] = "call"
-                    save_last_signal(state)
-                    signals.append(f"[{row.name}] 🔁 反手 Call 入场")
+                signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🔁 反手 Call 入场")
 
     # 3) 空仓：只有 pos == "none" 时才评估开仓
     elif pos == "none":
