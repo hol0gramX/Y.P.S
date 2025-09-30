@@ -213,36 +213,36 @@ elif pos == "put" and check_put_exit(row):
             save_last_signal(state)
             signals.append(f"[{row.name}] 🔁 反手 Call 入场")
 
-    # 无持仓逻辑
-    elif pos == "none":
-        if sideways:
-            if allow_bottom_rebound_call(row, prev):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, f"📈 底部反弹 Call 捕捉"
-            elif allow_top_rebound_put(row, prev):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, f"📉 顶部反转 Put 捕捉"
-        else:
-            if is_trend_up(df, idx) and check_call_entry(row):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, f"📈 主升浪 Call 入场（顺势）"
-            elif is_trend_down(df, idx) and check_put_entry(row):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, f"📉 主跌浪 Put 入场（顺势）"
-            elif allow_bottom_rebound_call(row, prev):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, f"📈 趋势中底部反弹 Call 捕捉"
-            elif allow_top_rebound_put(row, prev):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, f"📉 趋势中顶部回落 Put 捕捉"
+# ========== 无持仓逻辑 ==========
+elif pos == "none":
+    if sideways:
+        if allow_bottom_rebound_call(row, prev):
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, f"📈 底部反弹 Call 捕捉"
+        elif allow_top_rebound_put(row, prev):
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, f"📉 顶部反转 Put 捕捉"
+    else:
+        if is_trend_up(df, idx) and check_call_entry(row):
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, f"📈 主升浪 Call 入场（顺势）"
+        elif is_trend_down(df, idx) and check_put_entry(row):
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, f"📉 主跌浪 Put 入场（顺势）"
+        elif allow_bottom_rebound_call(row, prev):
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, f"📈 趋势中底部反弹 Call 捕捉"
+        elif allow_top_rebound_put(row, prev):
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, f"📉 趋势中顶部回落 Put 捕捉"
 
-    return None, None
+return None, None
 # ========== 通知 ==========
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
