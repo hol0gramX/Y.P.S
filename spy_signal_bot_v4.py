@@ -59,22 +59,13 @@ def is_market_open_now():
 # ========== 强制清仓机制 ==========
 def force_clear_at_open():
     now = get_est_now()
-    # 如果当前时间在开盘前 9:30
+    # 开盘前 9:30 清仓
     if now.time() < time(9, 30):
         state = load_last_signal()
         if state.get("position", "none") != "none":
             state["position"] = "none"
             save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏰ 盘前强制清仓（状态归零）")
-
-def force_clear_at_close():
-    now = get_est_now()
-    if time(15, 59) <= now.time() < time(16, 0):
-        state = load_last_signal()
-        if state.get("position", "none") != "none":
-            state["position"] = "none"
-            save_last_signal(state)
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏰ 15:59 自动清仓（状态归零）")
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏰ 盘前清仓（状态归零）")
 
 # ========== 技术指标 ==========
 def compute_rsi(s, length=14):
@@ -153,28 +144,28 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
 # ========== 信号判断 ==========
 def check_call_entry(row):
     return (row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15
-            and row['K'] > row['D'])  # KDJ 金叉确认
+            and row['K'] > row['D'])
 
 def check_put_entry(row):
     return (row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
-            and row['K'] < row['D'])  # KDJ 死叉确认
+            and row['K'] < row['D'])
 
 def allow_bottom_rebound_call(row, prev):
     return (row['Close'] < row['EMA20'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3
-            and row['K'] > row['D'])  # 必须金叉
+            and row['K'] > row['D'])
 
 def allow_top_rebound_put(row, prev):
     return (row['Close'] > row['EMA20'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3
-            and row['K'] < row['D'])  # 必须死叉
+            and row['K'] < row['D'])
 
 def check_call_exit(row):
     exit_cond = row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
-    strong_kdj = row['K'] > row['D']  # 趋势豁免：金叉未破
+    strong_kdj = row['K'] > row['D']
     return exit_cond and not strong_kdj
 
 def check_put_exit(row):
     exit_cond = row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
-    strong_kdj = row['K'] < row['D']  # 趋势豁免：死叉未破
+    strong_kdj = row['K'] < row['D']
     return exit_cond and not strong_kdj
 
 def is_trend_continuation(row, prev, position):
@@ -196,35 +187,28 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    signals = []  # 收集可能的多个消息（例如：先出场再反手）
+    signals = []
 
-    # 1) 有 Call 仓位：检查出场 & 反手
     if pos == "call":
         if check_call_exit(row):
             if not is_trend_continuation(row, prev, "call"):
                 state["position"] = "none"
                 save_last_signal(state)
                 signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Call 出场")
-
                 if check_put_entry(row) and not sideways:
                     state["position"] = "put"
                     save_last_signal(state)
                     signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🔁 反手 Put 入场")
-
-    # 2) 有 Put 仓位：检查出场 & 反手
     elif pos == "put":
         if check_put_exit(row):
             if not is_trend_continuation(row, prev, "put"):
                 state["position"] = "none"
                 save_last_signal(state)
                 signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Put 出场")
-
                 if check_call_entry(row) and not sideways:
                     state["position"] = "call"
                     save_last_signal(state)
                     signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🔁 反手 Call 入场")
-
-    # 3) 空仓：只有 pos == "none" 时才评估开仓
     elif pos == "none":
         if sideways:
             if allow_bottom_rebound_call(row, prev):
@@ -257,6 +241,7 @@ def generate_signal(df):
         return None, " | ".join(signals)
 
     return None, None
+
 # ========== 通知 ==========
 def send_to_discord(message):
     if not DISCORD_WEBHOOK_URL:
@@ -270,7 +255,7 @@ def main():
         now = get_est_now()
         print("=" * 60)
         print(f"🕒 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        force_clear_at_close()
+        force_clear_at_open()  # 盘前清仓
 
         state = load_last_signal()
         print(f"📦 当前仓位状态：{state.get('position', 'none')}")
@@ -283,9 +268,9 @@ def main():
         df = get_data()
         time_signal, signal = generate_signal(df)
         if signal:
-            if time_signal:  # 开仓逻辑（pos == "none"）
+            if time_signal:
                 msg = f"[{time_signal.strftime('%Y-%m-%d %H:%M:%S %Z')}] {signal}"
-            else:  # 出场/反手逻辑，signal 里已带时间戳
+            else:
                 msg = signal
             print(msg)
             send_to_discord(msg)
@@ -297,3 +282,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
