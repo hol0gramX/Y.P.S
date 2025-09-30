@@ -124,13 +124,6 @@ def get_data():
     df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20", "EMA50", "EMA200", "K", "D"], inplace=True)
     return df
 
-# ========== 趋势判断 ==========
-def is_trend_up(df, idx):
-    return df['EMA50'].iloc[idx] > df['EMA200'].iloc[idx]
-
-def is_trend_down(df, idx):
-    return df['EMA50'].iloc[idx] < df['EMA200'].iloc[idx]
-
 # ========== 震荡带判断 ==========
 def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
     if idx < window:
@@ -187,28 +180,28 @@ def generate_signal(df):
     prev = df.iloc[idx - 1]
     sideways = is_sideways(row, df, idx)
 
-    signals = []
-
     if pos == "call":
         if check_call_exit(row):
             if not is_trend_continuation(row, prev, "call"):
                 state["position"] = "none"
                 save_last_signal(state)
-                signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Call 出场")
+                signal = f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Call 出场"
                 if check_put_entry(row) and not sideways:
                     state["position"] = "put"
                     save_last_signal(state)
-                    signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🔁 反手 Put 入场")
+                    signal += f" | 🔁 反手 Put 入场"
+                return None, signal
     elif pos == "put":
         if check_put_exit(row):
             if not is_trend_continuation(row, prev, "put"):
                 state["position"] = "none"
                 save_last_signal(state)
-                signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Put 出场")
+                signal = f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] ⏹ Put 出场"
                 if check_call_entry(row) and not sideways:
                     state["position"] = "call"
                     save_last_signal(state)
-                    signals.append(f"[{row.name.strftime('%Y-%m-%d %H:%M:%S %Z')}] 🔁 反手 Call 入场")
+                    signal += f" | 🔁 反手 Call 入场"
+                return None, signal
     elif pos == "none":
         if sideways:
             if allow_bottom_rebound_call(row, prev):
@@ -220,14 +213,14 @@ def generate_signal(df):
                 save_last_signal(state)
                 return row.name, "📉 顶部反转 Put 捕捉"
         else:
-            if is_trend_up(df, idx) and check_call_entry(row):
+            if check_call_entry(row):
                 state["position"] = "call"
                 save_last_signal(state)
-                return row.name, "📈 主升浪 Call 入场（顺势）"
-            elif is_trend_down(df, idx) and check_put_entry(row):
+                return row.name, "📈 主升浪 Call 入场"
+            elif check_put_entry(row):
                 state["position"] = "put"
                 save_last_signal(state)
-                return row.name, "📉 主跌浪 Put 入场（顺势）"
+                return row.name, "📉 主跌浪 Put 入场"
             elif allow_bottom_rebound_call(row, prev):
                 state["position"] = "call"
                 save_last_signal(state)
@@ -236,9 +229,6 @@ def generate_signal(df):
                 state["position"] = "put"
                 save_last_signal(state)
                 return row.name, "📉 趋势中顶部回落 Put 捕捉"
-
-    if signals:
-        return None, " | ".join(signals)
 
     return None, None
 
