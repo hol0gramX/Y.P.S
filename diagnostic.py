@@ -1,110 +1,82 @@
 import yaml
+import os
 import pandas as pd
 import yfinance as yf
-import pandas_ta_remake as ta
-from datetime import datetime, timedelta
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
+import pandas_ta_remake as ta  # 确保这个包能用
 
-# ========== 加载配置 ==========
+# ========== 读取配置 ==========
 with open("diagnostic_config.yml", "r") as f:
-    config = yaml.safe_load(f)
+    cfg = yaml.safe_load(f)
 
-SYMBOL = config['symbol']
-EST = ZoneInfo(config['timezone'])
-data_start_hour = config['data_start_hour']
-lookback_days = config['lookback_days']
+SYMBOL = cfg["symbol"]
+EST = ZoneInfo(cfg["timezone"])
+DATA_START_HOUR = cfg["data_start_hour"]
+LOOKBACK_DAYS = cfg["lookback_days"]
+VERBOSE = cfg.get("verbose", True)
 
-rsi_length = config['rsi_length']
-rsi_slope_period = config['rsi_slope_period']
-ema_lengths = config['ema_lengths']
-macd_fast = config['macd_fast']
-macd_slow = config['macd_slow']
-macd_signal = config['macd_signal']
-kdj_length = config['kdj_length']
-kdj_signal = config['kdj_signal']
-verbose = config.get('verbose', True)
-
-# ========== 时间工具 ==========
+# ========== 工具 ==========
 def get_est_now():
     return datetime.now(tz=EST)
 
-# ========== 数据拉取 ==========
 def get_data():
     now = get_est_now()
-    start_time = (now - timedelta(days=lookback_days)).replace(hour=data_start_hour, minute=0, second=0, microsecond=0)
-    start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-    end_utc = now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-
+    start = now.replace(hour=DATA_START_HOUR, minute=0, second=0, microsecond=0)
     df = yf.download(
         SYMBOL,
         interval="1m",
-        start=start_utc,
-        end=end_utc,
+        start=start,
+        end=now,
         progress=False,
         prepost=True,
         auto_adjust=True
     )
-
     if df.empty:
         raise ValueError("数据为空")
-
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC").tz_convert(EST)
-    else:
-        df.index = df.index.tz_convert(EST)
-
+    df.index = df.index.tz_localize("UTC").tz_convert(EST) if df.index.tz is None else df.index.tz_convert(EST)
     return df
 
-# ========== 技术指标计算 ==========
-def compute_rsi(df):
-    delta = df['Close'].diff()
-    up = delta.clip(lower=0)
-    down = -delta.clip(upper=0)
-    rs = up.rolling(rsi_length).mean() / down.rolling(rsi_length).mean()
-    df['RSI'] = (100 - 100 / (1 + rs)).fillna(50)
-    df['RSI_SLOPE'] = df['RSI'].diff(rsi_slope_period).fillna(0)
-    return df
-
-def compute_ema(df):
-    for length in ema_lengths:
-        df[f'EMA{length}'] = ta.ema(df['Close'], length=length).fillna(method='bfill')
-    return df
-
-def compute_macd(df):
-    macd = ta.macd(df['Close'], fast=macd_fast, slow=macd_slow, signal=macd_signal)
+# ========== 指标计算 ==========
+def compute_indicators(df):
+    df['RSI'] = ta.rsi(df['Close'], length=cfg["rsi_length"])
+    df['RSI_SLOPE'] = df['RSI'].diff(cfg["rsi_slope_period"])
+    for ema_len in cfg["ema_lengths"]:
+        df[f'EMA{ema_len}'] = ta.ema(df['Close'], length=ema_len)
+    macd = ta.macd(df['Close'], fast=cfg["macd_fast"], slow=cfg["macd_slow"], signal=cfg["macd_signal"])
     df['MACD'] = macd['MACD_5_10_20'].fillna(0)
-    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
     df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
-    return df
-
-def compute_kdj(df):
-    kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=kdj_length, d=kdj_signal, smooth_k=kdj_signal)
+    kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=cfg["kdj_length"], d=cfg["kdj_signal"], smooth_k=cfg["kdj_signal"])
     df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
     df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
+    df.ffill(inplace=True)
     return df
 
-# ========== 主诊断 ==========
-df = get_data()
-df = compute_rsi(df)
-df = compute_ema(df)
-df = compute_macd(df)
-df = compute_kdj(df)
+# ========== 诊断函数 ==========
+def diagnose(df):
+    for i, row in df.iterrows():
+        reasons = []
+        if row['Close'] > row['EMA20']:
+            reasons.append("Close>EMA20")
+        if row['RSI'] > 53:
+            reasons.append("RSI>53")
+        if row['MACD'] > 0:
+            reasons.append("MACD>0")
+        if row['MACDh'] > 0:
+            reasons.append("MACDh>0")
+        if row['RSI_SLOPE'] > 0.15:
+            reasons.append("RSI_SLOPE>0.15")
 
-if verbose:
-    print("======= 前20行数据 =======")
-    print(df.head(20))
-    print("======= 后20行数据 =======")
-    print(df.tail(20))
+        if len(reasons) < 5:
+            print(f"[{i.strftime('%H:%M')}] ❌ 没信号，原因缺失：{set(['Close>EMA20','RSI>53','MACD>0','MACDh>0','RSI_SLOPE>0.15']) - set(reasons)}")
+        else:
+            print(f"[{i.strftime('%H:%M')}] ✅ 可以触发信号，全部条件满足")
 
-# 检查 NaN
-nan_counts = df.isna().sum()
-print("======= NaN 检查 =======")
-print(nan_counts)
+# ========== 主程序 ==========
+if __name__ == "__main__":
+    df = get_data()
+    df = compute_indicators(df)
+    diagnose(df)
 
-# 检查每个指标开盘时是否有效
-first_10 = df.head(10)
-for col in ['RSI', 'RSI_SLOPE', 'EMA20', 'MACD', 'MACDh', 'K', 'D']:
-    print(f"{col} 前10分钟值: {first_10[col].tolist()}")
