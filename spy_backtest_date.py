@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import yfinance as yf
-import pandas_ta_remake as ta
+import pandas_ta as ta
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 import pandas_market_calendars as mcal
