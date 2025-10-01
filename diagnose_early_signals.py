@@ -26,13 +26,13 @@ def compute_macd(df):
     try:
         print("正在计算 MACD...")
         macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-        if macd is not None:
+        if macd is not None and isinstance(macd, pd.DataFrame):
             df['MACD'] = macd['MACD_5_10_20'].fillna(0)
             df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
             df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
             print("MACD 计算成功")
         else:
-            print("MACD 计算失败，返回 None")
+            print("MACD 计算失败，返回 None 或格式错误")
     except Exception as e:
         print(f"计算 MACD 失败: {e}")
     return df
@@ -41,9 +41,12 @@ def compute_kdj(df):
     try:
         print("正在计算 KDJ...")
         kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=9, d=3, smooth_k=3)
-        df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
-        df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
-        print("KDJ 计算成功")
+        if kdj is not None and isinstance(kdj, pd.DataFrame):
+            df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
+            df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
+            print("KDJ 计算成功")
+        else:
+            print("KDJ 计算失败，返回 None 或格式错误")
     except Exception as e:
         print(f"计算 KDJ 失败: {e}")
     return df
@@ -104,4 +107,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
