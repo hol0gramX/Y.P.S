@@ -65,12 +65,10 @@ def fetch_data(start_date, end_date):
     df['RSI'] = compute_rsi(df['Close'], length=14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['EMA20'] = ta.ema(df['Close'], length=20)
-    df['EMA50'] = ta.ema(df['Close'], length=50)
-    df['EMA200'] = ta.ema(df['Close'], length=200)
     df = compute_macd(df)
     df = compute_kdj(df)
 
-    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','EMA50','EMA200','K','D'], inplace=True)
+    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','K','D'], inplace=True)
     return df
 
 # ==== 趋势判断 ====
