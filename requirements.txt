@@ -1,5 +1,5 @@
 numpy>=1.23
-pandas==2.2.3
+pandas>=2.3.2
 yfinance>=0.2.66
 requests>=2.32
 pandas_market_calendars>=5.1
