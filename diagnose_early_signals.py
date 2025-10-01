@@ -24,7 +24,9 @@ def compute_rsi(s, length=14):
 def compute_macd(df):
     try:
         print("正在计算 MACD...")
-        macd, macds, macdh = ta.MACD(df['Close'], fastperiod=5, slowperiod=10, signalperiod=20)
+        # 确保传入 numpy 数组
+        close_prices = df['Close'].to_numpy()  # 转换为 numpy 数组
+        macd, macds, macdh = ta.MACD(close_prices, fastperiod=5, slowperiod=10, signalperiod=20)
         df['MACD'] = macd.fillna(0)
         df['MACDs'] = macds.fillna(0)
         df['MACDh'] = macdh.fillna(0)
@@ -36,7 +38,10 @@ def compute_macd(df):
 def compute_kdj(df):
     try:
         print("正在计算 KDJ...")
-        slowk, slowd = ta.STOCH(df['High'], df['Low'], df['Close'], fastk_period=9, slowk_period=3, slowd_period=3)
+        high_prices = df['High'].to_numpy()  # 转换为 numpy 数组
+        low_prices = df['Low'].to_numpy()    # 转换为 numpy 数组
+        close_prices = df['Close'].to_numpy() # 转换为 numpy 数组
+        slowk, slowd = ta.STOCH(high_prices, low_prices, close_prices, fastk_period=9, slowk_period=3, slowd_period=3)
         df['K'] = slowk.fillna(50)
         df['D'] = slowd.fillna(50)
         print("KDJ 计算成功")
@@ -47,9 +52,10 @@ def compute_kdj(df):
 def compute_ema(df):
     try:
         print("正在计算 EMA...")
-        df['EMA20'] = ta.EMA(df['Close'], timeperiod=20)
-        df['EMA50'] = ta.EMA(df['Close'], timeperiod=50)
-        df['EMA200'] = ta.EMA(df['Close'], timeperiod=200)
+        close_prices = df['Close'].to_numpy()  # 转换为 numpy 数组
+        df['EMA20'] = ta.EMA(close_prices, timeperiod=20)
+        df['EMA50'] = ta.EMA(close_prices, timeperiod=50)
+        df['EMA200'] = ta.EMA(close_prices, timeperiod=200)
         print("EMA 计算成功")
     except Exception as e:
         print(f"计算 EMA 失败: {e}")
@@ -98,4 +104,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
