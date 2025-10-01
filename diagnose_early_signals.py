@@ -38,9 +38,10 @@ def compute_macd(df):
 def compute_kdj(df):
     try:
         print("正在计算 KDJ...")
-        high_prices = df['High'].to_numpy()  # 转换为 numpy 数组
-        low_prices = df['Low'].to_numpy()    # 转换为 numpy 数组
-        close_prices = df['Close'].to_numpy() # 转换为 numpy 数组
+        # 转换为 numpy 数组
+        high_prices = df['High'].to_numpy()  
+        low_prices = df['Low'].to_numpy()
+        close_prices = df['Close'].to_numpy()
         slowk, slowd = ta.STOCH(high_prices, low_prices, close_prices, fastk_period=9, slowk_period=3, slowd_period=3)
         df['K'] = slowk.fillna(50)
         df['D'] = slowd.fillna(50)
