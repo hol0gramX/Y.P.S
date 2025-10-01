@@ -25,7 +25,7 @@ def compute_macd(df):
     try:
         print("正在计算 MACD...")
         # 确保传入 numpy 数组
-        close_prices = df['Close'].to_numpy()  # 转换为 numpy 数组
+        close_prices = df['Close'].to_numpy().flatten()  # 转换为 numpy 数组并展平
         macd, macds, macdh = ta.MACD(close_prices, fastperiod=5, slowperiod=10, signalperiod=20)
         df['MACD'] = macd.fillna(0)
         df['MACDs'] = macds.fillna(0)
@@ -39,9 +39,9 @@ def compute_kdj(df):
     try:
         print("正在计算 KDJ...")
         # 转换为 numpy 数组
-        high_prices = df['High'].to_numpy()  
-        low_prices = df['Low'].to_numpy()
-        close_prices = df['Close'].to_numpy()
+        high_prices = df['High'].to_numpy().flatten()  
+        low_prices = df['Low'].to_numpy().flatten()
+        close_prices = df['Close'].to_numpy().flatten()
         slowk, slowd = ta.STOCH(high_prices, low_prices, close_prices, fastk_period=9, slowk_period=3, slowd_period=3)
         df['K'] = slowk.fillna(50)
         df['D'] = slowd.fillna(50)
@@ -53,7 +53,7 @@ def compute_kdj(df):
 def compute_ema(df):
     try:
         print("正在计算 EMA...")
-        close_prices = df['Close'].to_numpy()  # 转换为 numpy 数组
+        close_prices = df['Close'].to_numpy().flatten()  # 转换为 numpy 数组并展平
         df['EMA20'] = ta.EMA(close_prices, timeperiod=20)
         df['EMA50'] = ta.EMA(close_prices, timeperiod=50)
         df['EMA200'] = ta.EMA(close_prices, timeperiod=200)
