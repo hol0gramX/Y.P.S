@@ -1,10 +1,13 @@
-import yaml
+import sys
+sys.path.insert(0, "./pandas_ta_remake")  # 先把本地包路径加进去
+
 import os
+import yaml
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-import pandas_ta_remake as ta  # 确保这个包能用
+import pandas_ta_remake as ta  # 现在会优先导入本地的包
 
 # ========== 读取配置 ==========
 with open("diagnostic_config.yml", "r") as f:
