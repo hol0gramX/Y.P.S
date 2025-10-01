@@ -52,91 +52,54 @@ def compute_ema(df):
 
 # ====== 主函数 ======
 def main():
-    print("开始指标健康检查 (11:30–12:40)…")
-    df = yf.download("SPY", interval="1m", period="1d", progress=False)
+    print("开始 pre-market 数据诊断 (4:00–11:40)…")
+    
+    df = yf.download(
+        "SPY", interval="1m", period="1d", progress=False, prepost=True, auto_adjust=True
+    )
+    
     if df.empty:
         print("数据为空，无法计算指标")
         return
 
+    print(f"原始数据行数: {len(df)}")
+    
     # 转时区
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 截取 11:30–12:40
-    df = df.between_time("11:30", "12:40")
-
-    status = {}
+    # 选取 pre-market + 盘中数据
+    df = df.between_time("04:00", "11:40")
+    print(f"04:00–11:40 数据行数: {len(df)}")
+    
+    # 检查NaN数量
+    print("\n每列NaN数量：")
+    print(df.isna().sum())
 
     # RSI
-    try:
-        df['RSI'] = compute_rsi(df['Close'])
-        if df['RSI'] is not None:
-            status['RSI'] = "OK"
-            print("\nRSI 前5行:\n", df['RSI'].head())
-        else:
-            status['RSI'] = "错误"
-    except Exception as e:
-        print("RSI处理失败:", e)
-        status['RSI'] = "错误"
-
-    # RSI_SLOPE
-    try:
-        df['RSI_SLOPE'] = df['RSI'].diff(3)
-        status['RSI_SLOPE'] = "OK"
-        print("\nRSI_SLOPE 前5行:\n", df['RSI_SLOPE'].head())
-    except Exception as e:
-        print("RSI_SLOPE计算失败:", e)
-        status['RSI_SLOPE'] = "错误"
+    df['RSI'] = compute_rsi(df['Close'])
+    print("\nRSI 前10行:")
+    print(df['RSI'].head(10))
 
     # EMA
-    try:
-        df = compute_ema(df)
-        for ema in ['EMA20','EMA50','EMA200']:
-            if df is not None and ema in df.columns:
-                status[ema] = "OK"
-                print(f"\n{ema} 前5行:\n", df[ema].head())
-            else:
-                status[ema] = "错误"
-    except Exception as e:
-        print("EMA处理失败:", e)
-        for ema in ['EMA20','EMA50','EMA200']:
-            status[ema] = "错误"
+    df = compute_ema(df)
+    for ema in ['EMA20','EMA50','EMA200']:
+        print(f"\n{ema} 前10行:")
+        print(df[ema].head(10))
 
     # MACD
-    try:
-        df = compute_macd(df)
-        for col in ['MACD','MACDs','MACDh']:
-            if df is not None and col in df.columns:
-                status[col] = "OK"
-                print(f"\n{col} 前5行:\n", df[col].head())
-            else:
-                status[col] = "错误"
-    except Exception as e:
-        print("MACD处理失败:", e)
-        for col in ['MACD','MACDs','MACDh']:
-            status[col] = "错误"
+    df = compute_macd(df)
+    for col in ['MACD','MACDs','MACDh']:
+        print(f"\n{col} 前10行:")
+        print(df[col].head(10))
 
     # KDJ
-    try:
-        df = compute_kdj(df)
-        for col in ['K','D']:
-            if df is not None and col in df.columns:
-                status[col] = "OK"
-                print(f"\n{col} 前5行:\n", df[col].head())
-            else:
-                status[col] = "错误"
-    except Exception as e:
-        print("KDJ处理失败:", e)
-        for col in ['K','D']:
-            status[col] = "错误"
-
-    # 最终结果
-    print("\n=== 指标健康检查结果 (11:30–12:40) ===")
-    for k,v in status.items():
-        print(f"{k}: {v}")
+    df = compute_kdj(df)
+    for col in ['K','D']:
+        print(f"\n{col} 前10行:")
+        print(df[col].head(10))
 
 if __name__ == "__main__":
     main()
-
