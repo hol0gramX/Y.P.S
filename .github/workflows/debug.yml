@@ -1,31 +1,24 @@
-name: Debug Signals
+name: Diagnostic Workflow
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
-  run-debug:
+  diagnostic:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas pandas_ta_remake
-
-      - name: Run debug script
-        run: |
-          python debug_signals.py
-
-          python -m pip install --upgrade pip
-          pip install numpy pandas yfinance requests pandas_market_calendars pyyaml
+          pip install yfinance==0.2.66 pandas==2.2.2 pandas_ta
 
       - name: Run diagnostic
         run: python diagnostic.py
