@@ -4,6 +4,8 @@ yfinance>=0.2.66
 requests>=2.32
 pandas_market_calendars>=5.1
 pandas-ta==0.4.71b0
+TA-Lib>=0.4.0
+
 
 
 
