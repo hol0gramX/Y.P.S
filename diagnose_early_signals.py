@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta_remake as ta
+import pandas_ta as ta
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
