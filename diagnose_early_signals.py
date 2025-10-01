@@ -16,9 +16,12 @@ def compute_rsi(s, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
-    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
-    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
+    if macd is None:
+        df['MACD'] = df['MACDs'] = df['MACDh'] = 0
+    else:
+        df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+        df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+        df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
 def compute_kdj(df, length=9, signal=3):
@@ -27,7 +30,7 @@ def compute_kdj(df, length=9, signal=3):
     df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
     return df
 
-# ======== 信号条件 ========
+# ======== 信号条件拆解 ========
 def check_call_entry(row):
     return {
         "Close>EMA20": row['Close'] > row['EMA20'],
