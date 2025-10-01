@@ -6,12 +6,14 @@ from zoneinfo import ZoneInfo
 
 EST = ZoneInfo("America/New_York")
 
+# ====== 技术指标计算函数 ======
 def compute_rsi(s, length=14):
     delta = s.diff()
     up = delta.clip(lower=0)
     down = -delta.clip(upper=0)
     rs = up.rolling(length).mean() / down.rolling(length).mean()
-    return (100 - 100 / (1 + rs)).fillna(50)
+    rsi = (100 - 100 / (1 + rs)).fillna(50)
+    return rsi
 
 def compute_macd(df):
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
@@ -32,43 +34,37 @@ def compute_ema(df):
     df['EMA200'] = ta.ema(df['Close'], length=200)
     return df
 
-def get_data():
-    now = datetime.now(tz=EST)
-    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
-
+# ====== 主函数 ======
+def main():
+    print("开始抓取 9:30–11:40 数据并计算指标…")
+    
     df = yf.download(
-        "SPY",
-        interval="1m",
-        start=start_time,
-        end=now,
-        progress=False,
-        prepost=True,
-        auto_adjust=True
+        "SPY", interval="1m", period="1d", progress=False, prepost=True, auto_adjust=True
     )
-
+    
     if df.empty:
-        raise ValueError("数据为空")
+        print("数据为空，无法计算指标")
+        return
 
-    # 转 EST
+    # 转时区
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(EST)
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 只保留当天数据
-    df = df.between_time("04:00", "16:00")
+    # 选取 9:30–11:40
+    df = df.between_time("09:30", "11:40")
+    print(f"9:30–11:40 数据行数: {len(df)}\n")
 
-    # 计算指标
+    # 检查前20行
+    print("前20行数据及计算指标：\n")
     df['RSI'] = compute_rsi(df['Close'])
     df = compute_ema(df)
     df = compute_macd(df)
     df = compute_kdj(df)
 
-    # 向前填充，保证开盘就有信号
-    df.ffill(inplace=True)
+    print(df[['Open','High','Low','Close','RSI','EMA20','MACD','MACDh','K','D']].head(20))
 
-    # 去掉仍然缺少的关键列
-    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20", "K", "D"], inplace=True)
-
-    return df
+if __name__ == "__main__":
+    main()
 
