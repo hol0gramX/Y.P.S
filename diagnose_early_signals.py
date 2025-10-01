@@ -52,7 +52,7 @@ def compute_ema(df):
 
 # ====== 主函数 ======
 def main():
-    print("开始指标健康检查 (9:30–11:40)…")
+    print("开始指标健康检查 (11:30–12:40)…")
     df = yf.download("SPY", interval="1m", period="1d", progress=False)
     if df.empty:
         print("数据为空，无法计算指标")
@@ -64,8 +64,8 @@ def main():
     else:
         df.index = df.index.tz_convert(EST)
 
-    # 截取 9:30–11:40
-    df = df.between_time("09:30", "11:40")
+    # 截取 11:30–12:40
+    df = df.between_time("11:30", "12:40")
 
     status = {}
 
@@ -133,7 +133,7 @@ def main():
             status[col] = "错误"
 
     # 最终结果
-    print("\n=== 指标健康检查结果 (9:30–11:40) ===")
+    print("\n=== 指标健康检查结果 (11:30–12:40) ===")
     for k,v in status.items():
         print(f"{k}: {v}")
 
