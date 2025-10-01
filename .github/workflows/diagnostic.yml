@@ -1,15 +1,13 @@
-name: Diagnostic SPY Signals
+name: Diagnostic
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
 
 jobs:
-  run-diagnostic:
+  diagnostic:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -18,10 +16,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pyyaml yfinance pandas requests pytz
-          # 如果你有 pandas_ta_remake 仓库可 pip install
-          pip install git+https://github.com/你的仓库/pandas_ta_remake.git
+          python -m pip install --upgrade pip
+          pip install numpy pandas yfinance requests pandas_market_calendars pyyaml
 
       - name: Run diagnostic
         run: python diagnostic.py
