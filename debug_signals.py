@@ -29,16 +29,31 @@ def compute_kdj(df, length=9, signal=3):
 
 # ======== 信号条件 ========
 def check_call_entry(row):
-    return (row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and 
-            row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15 and row['K'] > row['D'])
+    return {
+        "Close>EMA20": row['Close'] > row['EMA20'],
+        "RSI>53": row['RSI'] > 53,
+        "MACD>0": row['MACD'] > 0,
+        "MACDh>0": row['MACDh'] > 0,
+        "RSI_SLOPE>0.15": row['RSI_SLOPE'] > 0.15,
+        "K>D": row['K'] > row['D'],
+        "Signal": (row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD'] > 0 and 
+                   row['MACDh'] > 0 and row['RSI_SLOPE'] > 0.15 and row['K'] > row['D'])
+    }
 
 def check_put_entry(row):
-    return (row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and 
-            row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15 and row['K'] < row['D'])
+    return {
+        "Close<EMA20": row['Close'] < row['EMA20'],
+        "RSI<47": row['RSI'] < 47,
+        "MACD<0": row['MACD'] < 0,
+        "MACDh<0": row['MACDh'] < 0,
+        "RSI_SLOPE<-0.15": row['RSI_SLOPE'] < -0.15,
+        "K<D": row['K'] < row['D'],
+        "Signal": (row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and 
+                   row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15 and row['K'] < row['D'])
+    }
 
 # ======== 主诊断逻辑 ========
 def main():
-    now = datetime.now(tz=EST)
     df = yf.download("SPY", interval="1m", period="1d", prepost=False, auto_adjust=True)
 
     if df.index.tz is None:
@@ -46,6 +61,7 @@ def main():
     else:
         df.index = df.index.tz_convert(EST)
 
+    # 指标计算
     df['RSI'] = compute_rsi(df['Close'])
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['EMA20'] = ta.ema(df['Close'], length=20)
@@ -54,22 +70,29 @@ def main():
     df = compute_macd(df)
     df = compute_kdj(df)
 
-    # 只截取 9:30–11:40
+    # 截取 9:30–11:40
     df = df.between_time("09:30", "11:40")
 
     print("="*80)
-    print("🕒 诊断区间数据 (9:30–11:40)")
-    print(df[['Close','EMA20','RSI','RSI_SLOPE','MACD','MACDh','K','D']].head(20))  # 前20行看看
+    print("🕒 诊断区间数据 (9:30–11:40) 前20行")
+    print(df[['Close','EMA20','RSI','RSI_SLOPE','MACD','MACDh','K','D']].head(20))
 
     print("="*80)
-    print("📈 检查逐分钟信号触发情况")
+    print("📈 逐分钟条件诊断")
     for t, row in df.iterrows():
-        call_ok = check_call_entry(row)
-        put_ok = check_put_entry(row)
-        if call_ok or put_ok:
-            print(f"{t.strftime('%H:%M')} ✅ 信号触发: {'CALL' if call_ok else 'PUT'}")
+        call = check_call_entry(row)
+        put = check_put_entry(row)
+        status = f"{t.strftime('%H:%M')} | "
+        if call["Signal"]:
+            status += "✅ CALL 信号触发"
+        elif put["Signal"]:
+            status += "✅ PUT 信号触发"
         else:
-            print(f"{t.strftime('%H:%M')} ❌ 无信号")
+            status += "❌ 无信号"
+        # 打印每个条件是否满足，方便分析
+        status += f" | CALL: {[(k,v) for k,v in call.items() if k!='Signal']}"
+        status += f" | PUT: {[(k,v) for k,v in put.items() if k!='Signal']}"
+        print(status)
 
 if __name__ == "__main__":
     main()
