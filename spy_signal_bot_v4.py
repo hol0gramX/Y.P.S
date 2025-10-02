@@ -95,6 +95,23 @@ def get_data():
     start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     end_utc = now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
+    # ==== 调试：打印今天开盘前 20 条数据 ====
+    try:
+        # 过滤出今天盘前（4:00-9:30）的数据
+        today = now.date()
+        pre_open_df = df.between_time("04:00", "09:29")
+        pre_open_df = pre_open_df[pre_open_df.index.date == today]
+
+        if not pre_open_df.empty:
+            print("\n=== 今日 9:30 开盘前前 20 条数据（含指标） ===")
+            cols = ["Close", "RSI", "RSI_SLOPE", "EMA20", "MACD", "MACDh", "K", "D"]
+            print(pre_open_df[cols].head(20).to_string())
+            print("===========================================\n")
+        else:
+            print("⚠️ 今日盘前没有拉到数据（可能是美股休市）")
+    except Exception as dbg_e:
+        print("⚠️ 调试打印盘前数据失败：", dbg_e)
+
     df = yf.download(
         SYMBOL, interval="1m", start=start_utc, end=end_utc,
         progress=False, prepost=True, auto_adjust=True
