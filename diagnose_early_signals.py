@@ -83,4 +83,3 @@ if __name__ == "__main__":
     df = get_data()
     debug_show_open_data(df)
 
-
