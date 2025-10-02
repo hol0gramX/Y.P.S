@@ -1,117 +1,88 @@
-import yfinance as yf
+import os
 import pandas as pd
-import talib as ta
-import numpy as np  # 添加 numpy
-from datetime import datetime
+import yfinance as yf
+import pandas_ta as ta
+from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
+import pandas_market_calendars as mcal
 
+# ==== 配置 ==== 
+SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
+nasdaq = mcal.get_calendar("NASDAQ")
+REGULAR_START = time(9, 30)
+REGULAR_END = time(16, 0)
 
-# ====== 技术指标计算函数 ======
-def compute_rsi(s, length=14):
-    try:
-        print("正在计算 RSI...")
-        delta = s.diff()
-        up = delta.clip(lower=0)
-        down = -delta.clip(upper=0)
-        rs = up.rolling(length).mean() / down.rolling(length).mean()
-        rsi = (100 - 100 / (1 + rs)).fillna(50)
-        print("RSI 计算成功")
-        return rsi
-    except Exception as e:
-        print(f"计算 RSI 失败: {e}")
-        return pd.Series([None] * len(s))
+# ==== 时间工具 ==== 
+def is_market_day(dt):
+    sched = nasdaq.schedule(start_date=dt.date(), end_date=dt.date())
+    return not sched.empty
+
+# ==== 技术指标 ==== 
+def compute_rsi(series, length=14):
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    rs = up.rolling(length).mean() / down.rolling(length).mean()
+    return (100 - 100 / (1 + rs)).fillna(50)
 
 def compute_macd(df):
-    try:
-        print("正在计算 MACD...")
-        # 确保传入 numpy 数组
-        close_prices = df['Close'].to_numpy().flatten()  # 转换为 numpy 数组并展平
-        macd, macds, macdh = ta.MACD(close_prices, fastperiod=5, slowperiod=10, signalperiod=20)
-        
-        # 处理 NaN 值：转换为 pandas Series 并填充 NaN
-        df['MACD'] = pd.Series(macd).fillna(0)
-        df['MACDs'] = pd.Series(macds).fillna(0)
-        df['MACDh'] = pd.Series(macdh).fillna(0)
-
-        print("MACD 计算成功")
-    except Exception as e:
-        print(f"计算 MACD 失败: {e}")
+    macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
+    df['MACD'] = macd['MACD_5_10_20'].fillna(0)
+    df['MACDs'] = macd['MACDs_5_10_20'].fillna(0)
+    df['MACDh'] = macd['MACDh_5_10_20'].fillna(0)
     return df
 
-def compute_kdj(df):
-    try:
-        print("正在计算 KDJ...")
-        # 转换为 numpy 数组
-        high_prices = df['High'].to_numpy().flatten()  
-        low_prices = df['Low'].to_numpy().flatten()
-        close_prices = df['Close'].to_numpy().flatten()
-        slowk, slowd = ta.STOCH(high_prices, low_prices, close_prices, fastk_period=9, slowk_period=3, slowd_period=3)
-        
-        # 处理 NaN 值：转换为 pandas Series 并填充 NaN
-        df['K'] = pd.Series(slowk).fillna(50)
-        df['D'] = pd.Series(slowd).fillna(50)
-        print("KDJ 计算成功")
-    except Exception as e:
-        print(f"计算 KDJ 失败: {e}")
+def compute_kdj(df, length=9, signal=3):
+    kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=length, d=signal, smooth_k=signal)
+    df['K'] = kdj['STOCHk_9_3_3'].fillna(50)
+    df['D'] = kdj['STOCHd_9_3_3'].fillna(50)
     return df
 
-def compute_ema(df):
-    try:
-        print("正在计算 EMA...")
-        close_prices = df['Close'].to_numpy().flatten()  # 转换为 numpy 数组并展平
-        df['EMA20'] = ta.EMA(close_prices, timeperiod=20)
-        df['EMA50'] = ta.EMA(close_prices, timeperiod=50)
-        df['EMA200'] = ta.EMA(close_prices, timeperiod=200)
-        print("EMA 计算成功")
-    except Exception as e:
-        print(f"计算 EMA 失败: {e}")
+# ==== 数据拉取 ==== 
+def fetch_data(start_date, end_date):
+    df = yf.download(
+        SYMBOL,
+        start=start_date,
+        end=end_date + timedelta(days=1),
+        interval="1m",
+        prepost=True,
+        progress=False,
+        auto_adjust=True,
+    )
+    if df.empty:
+        raise ValueError("无数据")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df.index.name = "Datetime"
+    if df.index.tz is None:
+        df.index = df.index.tz_localize("UTC").tz_convert(EST)
+    else:
+        df.index = df.index.tz_convert(EST)
+    df = df[~df.index.duplicated(keep='last')]
+
+    # 指标计算
+    df['RSI'] = compute_rsi(df['Close'], length=14)
+    df['RSI_SLOPE'] = df['RSI'].diff(3)
+    df['EMA20'] = ta.ema(df['Close'], length=20)
+    df = compute_macd(df)
+    df = compute_kdj(df)
+
+    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','K','D'], inplace=True)
     return df
 
-# ====== 主函数 ======
-def main():
-    print("开始抓取从 4点开始的数据并计算指标…")
-    try:
-        df = yf.download(
-            "SPY", interval="1m", period="1d", progress=False, prepost=True, auto_adjust=True
-        )
-        if df.empty:
-            print("数据为空，无法计算指标")
-            return
+# ==== 回测主逻辑 ==== 
+def diagnose_data(start_date_str, end_date_str):
+    start_date = datetime.strptime(start_date_str,"%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date_str,"%Y-%m-%d").date()
+    print(f"[🔁 诊断时间区间] {start_date} ~ {end_date}")
 
-        # 转时区
-        if df.index.tz is None:
-            df.index = df.index.tz_localize("UTC").tz_convert(EST)
-        else:
-            df.index = df.index.tz_convert(EST)
+    df = fetch_data(start_date, end_date)
+    print(f"数据条数：{len(df)}")
 
-        # 选取从 4点开始的数据
-        df = df.between_time("04:00", "11:40")
-        print(f"从 4点到 11:40 数据行数: {len(df)}\n")
-
-        # 检查数据是否完整
-        if df.isnull().any().any():
-            print("数据存在缺失值，请检查数据完整性")
-            print(df.isnull().sum())
-            return
-
-        # 计算技术指标
-        print("计算各项技术指标…")
-        df['RSI'] = compute_rsi(df['Close'])
-        df = compute_ema(df)
-        df = compute_macd(df)
-        df = compute_kdj(df)
-
-        # 填充 NaN 值，避免 NaN 显示在结果中
-        df.fillna(0, inplace=True)
-
-        # 打印所有列，包括价格和技术指标
-        print("前20行数据及计算指标：\n")
-        print(df[['Open', 'High', 'Low', 'Close', 'RSI', 'EMA20', 'EMA50', 'EMA200', 'MACD', 'MACDs', 'MACDh', 'K', 'D']].head(20))
-
-    except Exception as e:
-        print(f"运行过程中发生错误: {e}")
+    # 打印前 30 行数据
+    print("\n[诊断] 9:30 - 11:40 前的前 30 行数据：")
+    print(df.head(30))  # 输出前 30 行数据
 
 if __name__ == "__main__":
-    main()
-
+    diagnose_data("2025-10-01", "2025-10-01")
