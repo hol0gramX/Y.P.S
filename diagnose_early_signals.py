@@ -1,13 +1,12 @@
+# debug_open_data.py
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
-import pandas_market_calendars as mcal
 
 SYMBOL = "SPY"
 EST = ZoneInfo("America/New_York")
-nasdaq = mcal.get_calendar("NASDAQ")
 
 # ==== 技术指标 ====
 def compute_rsi(s, length=14):
@@ -19,30 +18,30 @@ def compute_rsi(s, length=14):
 
 def compute_macd(df):
     macd = ta.macd(df['Close'], fast=5, slow=10, signal=20)
-    df['MACD'] = macd['MACD_5_10_20']
-    df['MACDs'] = macd['MACDs_5_10_20']
-    df['MACDh'] = macd['MACDh_5_10_20']
+    df["MACD"] = macd["MACD_5_10_20"].fillna(0)
+    df["MACDs"] = macd["MACDs_5_10_20"].fillna(0)
+    df["MACDh"] = macd["MACDh_5_10_20"].fillna(0)
     return df
 
 def compute_kdj(df, length=9, signal=3):
-    kdj = ta.stoch(df['High'], df['Low'], df['Close'], k=length, d=signal, smooth_k=signal)
-    df['K'] = kdj['STOCHk_9_3_3']
-    df['D'] = kdj['STOCHd_9_3_3']
+    kdj = ta.stoch(df["High"], df["Low"], df["Close"], k=length, d=signal, smooth_k=signal)
+    df["K"] = kdj["STOCHk_9_3_3"].fillna(50)
+    df["D"] = kdj["STOCHd_9_3_3"].fillna(50)
     return df
 
-# ==== 数据拉取 ====
+# ==== 拉取数据 ====
 def get_data():
-    now = datetime.now(tz=EST)
-    start_time = now.replace(hour=4, minute=0, second=0, microsecond=0)
-    start_utc = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-    end_utc = now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    # 固定获取 2025-10-01 当天的数据
+    start_utc = datetime(2025, 10, 1, 4, 0).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    end_utc = datetime(2025, 10, 1, 9, 30).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
 
     df = yf.download(
         SYMBOL, interval="1m", start=start_utc, end=end_utc,
         progress=False, prepost=True, auto_adjust=True
     )
+
     if df.empty:
-        raise ValueError("数据为空")
+        raise ValueError("❌ 没有拉到数据，请检查 yfinance")
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -54,34 +53,34 @@ def get_data():
     else:
         df.index = df.index.tz_convert(EST)
 
-    df['RSI'] = compute_rsi(df['Close'])
-    df['RSI_SLOPE'] = df['RSI'].diff(3)
-    df['EMA20'] = ta.ema(df['Close'], length=20)
+    # 技术指标
+    df["RSI"] = compute_rsi(df["Close"])
+    df["RSI_SLOPE"] = df["RSI"].diff(3)
+    df["EMA20"] = ta.ema(df["Close"], length=20)
     df = compute_macd(df)
     df = compute_kdj(df)
 
+    df.ffill(inplace=True)
+    df.dropna(subset=["High", "Low", "Close", "RSI", "MACD", "MACDh", "EMA20", "K", "D"], inplace=True)
     return df
 
-# ==== 诊断 ====
-def diagnose_indicators():
-    df = get_data()
-    print(f"✅ 拉取到 {len(df)} 条数据，范围：{df.index[0]} ~ {df.index[-1]}")
-    print("=" * 60)
+# ==== 打印调试数据 ====
+def debug_show_open_data(df):
+    pd.set_option("display.max_rows", None)
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.width", 2000)
+    pd.set_option("display.float_format", lambda x: f"{x:.4f}")
 
-    indicators = ["RSI", "RSI_SLOPE", "EMA20", "MACD", "MACDh", "K", "D"]
+    # 过滤 2025-10-01 开盘 9:30 前数据
+    df_oct1 = df[df.index.date == datetime(2025, 10, 1).date()]
+    df_pre_open = df_oct1[df_oct1.index.time < time(9, 30)]
 
-    for col in indicators:
-        non_na = df[col].notna().sum()
-        first_valid = df[col].first_valid_index()
-        last_valid = df[col].last_valid_index()
-        total = len(df)
-        print(f"{col:<8} → 非空 {non_na}/{total} "
-              f"({non_na/total:.1%}) | 首个值: {first_valid}, 最后值: {last_valid}")
-
-    print("=" * 60)
-    print("📌 最近 5 行数据（含指标）检查：")
-    print(df[indicators].tail(5))
+    print("\n=== 📝 2025-10-01 开盘 9:30 前二十条数据 ===")
+    cols = ["Close", "RSI", "RSI_SLOPE", "EMA20", "MACD", "MACDh", "K", "D"]
+    print(df_pre_open[cols].head(20))
 
 if __name__ == "__main__":
-    diagnose_indicators()
+    df = get_data()
+    debug_show_open_data(df)
+
 
