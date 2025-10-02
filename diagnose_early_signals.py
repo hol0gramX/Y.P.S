@@ -1,6 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import talib as ta
+import numpy as np  # 添加 numpy
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -27,9 +28,12 @@ def compute_macd(df):
         # 确保传入 numpy 数组
         close_prices = df['Close'].to_numpy().flatten()  # 转换为 numpy 数组并展平
         macd, macds, macdh = ta.MACD(close_prices, fastperiod=5, slowperiod=10, signalperiod=20)
-        df['MACD'] = macd.fillna(0)
-        df['MACDs'] = macds.fillna(0)
-        df['MACDh'] = macdh.fillna(0)
+        
+        # 处理 NaN 值：转换为 pandas Series 并填充 NaN
+        df['MACD'] = pd.Series(macd).fillna(0)
+        df['MACDs'] = pd.Series(macds).fillna(0)
+        df['MACDh'] = pd.Series(macdh).fillna(0)
+
         print("MACD 计算成功")
     except Exception as e:
         print(f"计算 MACD 失败: {e}")
@@ -43,8 +47,10 @@ def compute_kdj(df):
         low_prices = df['Low'].to_numpy().flatten()
         close_prices = df['Close'].to_numpy().flatten()
         slowk, slowd = ta.STOCH(high_prices, low_prices, close_prices, fastk_period=9, slowk_period=3, slowd_period=3)
-        df['K'] = slowk.fillna(50)
-        df['D'] = slowd.fillna(50)
+        
+        # 处理 NaN 值：转换为 pandas Series 并填充 NaN
+        df['K'] = pd.Series(slowk).fillna(50)
+        df['D'] = pd.Series(slowd).fillna(50)
         print("KDJ 计算成功")
     except Exception as e:
         print(f"计算 KDJ 失败: {e}")
