@@ -102,9 +102,9 @@ def main():
         df = compute_macd(df)
         df = compute_kdj(df)
 
-        # 检查指标计算结果
+        # 打印所有列的数据
         print("前20行数据及计算指标：\n")
-        print(df[['Open', 'High', 'Low', 'Close', 'RSI', 'EMA20', 'MACD', 'MACDh', 'K', 'D']].head(20))
+        print(df.head(20))  # 这里不限制列，直接打印所有数据
 
     except Exception as e:
         print(f"运行过程中发生错误: {e}")
