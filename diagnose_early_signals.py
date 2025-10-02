@@ -70,7 +70,7 @@ def compute_ema(df):
 
 # ====== 主函数 ======
 def main():
-    print("开始抓取 9:30–11:40 数据并计算指标…")
+    print("开始抓取从 4点开始的数据并计算指标…")
     try:
         df = yf.download(
             "SPY", interval="1m", period="1d", progress=False, prepost=True, auto_adjust=True
@@ -85,9 +85,9 @@ def main():
         else:
             df.index = df.index.tz_convert(EST)
 
-        # 选取 9:30–11:40 数据
-        df = df.between_time("09:30", "11:40")
-        print(f"9:30–11:40 数据行数: {len(df)}\n")
+        # 选取从 4点开始的数据
+        df = df.between_time("04:00", "11:40")
+        print(f"从 4点到 11:40 数据行数: {len(df)}\n")
 
         # 检查数据是否完整
         if df.isnull().any().any():
@@ -102,12 +102,16 @@ def main():
         df = compute_macd(df)
         df = compute_kdj(df)
 
-        # 打印所有列的数据
+        # 填充 NaN 值，避免 NaN 显示在结果中
+        df.fillna(0, inplace=True)
+
+        # 打印所有列，包括价格和技术指标
         print("前20行数据及计算指标：\n")
-        print(df.head(20))  # 这里不限制列，直接打印所有数据
+        print(df[['Open', 'High', 'Low', 'Close', 'RSI', 'EMA20', 'EMA50', 'EMA200', 'MACD', 'MACDs', 'MACDh', 'K', 'D']].head(20))
 
     except Exception as e:
         print(f"运行过程中发生错误: {e}")
 
 if __name__ == "__main__":
     main()
+
