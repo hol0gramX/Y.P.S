@@ -30,12 +30,9 @@ jobs:
 
       - name: Install dependencies (cached)
         run: |
-          if [ ! -d ~/.cache/pip ]; then
-            echo "Installing dependencies..."
-            pip install -r requirements.txt
-          else
-            echo "Using cached dependencies."
-          fi
+          echo "Installing dependencies..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run the signal script
         env:
