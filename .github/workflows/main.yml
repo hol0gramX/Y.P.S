@@ -28,15 +28,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install dependencies (cached)
+      - name: Install dependencies
         run: |
-          echo "Installing dependencies..."
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt  # 自动安装 requests 等依赖
 
       - name: Run the signal script
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: python spy_signal_bot_v4.py
-
