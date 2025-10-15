@@ -158,8 +158,7 @@ def backtest(start_date_str, end_date_str):
         # 空仓入场
         if position=="none":
             if is_sideways(row,df,i):
-                if allow_bottom_rebound_call(row,prev): signals.append(f"[{ts}] 📈 底部反弹 Call"); position="call"
-                elif allow_top_rebound_put(row,prev): signals.append(f"[{ts}] 📉 顶部回落 Put"); position="put"
+                pass
             else:
                 if check_call_entry(row): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
                 elif check_put_entry(row): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
