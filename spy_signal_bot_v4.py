@@ -201,32 +201,28 @@ def generate_signal(df):
                     signal += f" | 🔁 反手 Call 入场"
                 return None, signal
     elif pos == "none":
-        if sideways:
-            if allow_bottom_rebound_call(row, prev):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, "📈 底部反弹 Call 捕捉"
-            elif allow_top_rebound_put(row, prev):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, "📉 顶部反转 Put 捕捉"
-        else:
-            if check_call_entry(row):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, "📈 主升浪 Call 入场"
-            elif check_put_entry(row):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, "📉 主跌浪 Put 入场"
-            elif allow_bottom_rebound_call(row, prev):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, "📈 趋势中底部反弹 Call 捕捉"
-            elif allow_top_rebound_put(row, prev):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, "📉 趋势中顶部回落 Put 捕捉"
+    if sideways:
+        pass
+    else:
+        if check_call_entry(row):
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, "📈 主升浪 Call 入场"
+
+        elif check_put_entry(row):
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, "📉 主跌浪 Put 入场"
+
+        elif allow_bottom_rebound_call(row, prev):
+            state["position"] = "call"
+            save_last_signal(state)
+            return row.name, "📈 趋势中底部反弹 Call 捕捉"
+
+        elif allow_top_rebound_put(row, prev):
+            state["position"] = "put"
+            save_last_signal(state)
+            return row.name, "📉 趋势中顶部回落 Put 捕捉"
 
     return None, None
 
