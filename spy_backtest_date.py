@@ -74,14 +74,12 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, idx, window=5, slope_th=0.0005, dist_th=0.008):
+def is_sideways(row, df, idx, window=5, slope_th=0.0006):
     """
-    改进版智能震荡判断（MA5,10,20 日内/中短线）
-    条件评分法：
+    极严格横盘判断（只保留两个条件）：
     1️⃣ MA5, MA10, MA20 顺序混乱
     2️⃣ MA20 斜率过平
-    3️⃣ MA 间距过小
-    满足任意两条即判定为震荡
+    只有同时满足才判定为横盘
     """
     if idx < max(window, 20):
         return False
@@ -102,15 +100,8 @@ def is_sideways(row, df, idx, window=5, slope_th=0.0005, dist_th=0.008):
     slope = (y[-1] - y[0]) / len(y) / y[-1]
     is_flat = abs(slope) < slope_th
 
-    # 3️⃣ 均线间距
-    dist = (abs(ma5 - ma10) + abs(ma10 - ma20)) / row['Close']
-    is_close = dist < dist_th
-
-    # 条件评分
-    score = sum([is_messy, is_flat, is_close])
-
-    # 满足3条判震荡
-    return score >= 3
+    # 同时满足两个条件才判横盘
+    return is_messy and is_flat
 
 
 # ==== 信号判断 ====
