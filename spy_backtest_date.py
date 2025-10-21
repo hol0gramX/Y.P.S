@@ -68,31 +68,50 @@ def fetch_data(start_date, end_date):
     df['MA5'] = ta.sma(df['Close'], length=5)
     df['MA10'] = ta.sma(df['Close'], length=10)
     df['MA20'] = ta.sma(df['Close'], length=20)
-    df['EMA5'] = ta.ema(df['Close'], length=5)
-    df['EMA10'] = ta.ema(df['Close'], length=10)
-    df['EMA20'] = ta.ema(df['Close'], length=20)
     df = compute_macd(df)
     df = compute_kdj(df)
     df.dropna(inplace=True)
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, idx, window=10, price_threshold=0.005, ema_threshold=0.001):
-    if idx < window:
+def is_sideways_improved(row, df, idx, window=5, slope_th=0.001, dist_th=0.01):
+    """
+    改进版智能震荡判断（MA5,10,20 日内/中短线）
+    条件评分法：
+    1️⃣ MA5, MA10, MA20 顺序混乱
+    2️⃣ MA20 斜率过平
+    3️⃣ MA 间距过小
+    满足任意两条即判定为震荡
+    """
+    if idx < max(window, 20):
         return False
 
-    price_near = abs(row['Close'] - row['EMA20']) / row['EMA20'] < price_threshold
-    ema_now = row['EMA20']
-    ema_past = df.iloc[idx - window]['EMA20']
-    ema_flat = abs(ema_now - ema_past) / ema_past < ema_threshold
+    # 计算均线
+    ma5 = df['Close'].iloc[idx-5:idx].mean()
+    ma10 = df['Close'].iloc[idx-10:idx].mean()
+    ma20_series = df['Close'].iloc[idx-20:idx]
+    ma20 = ma20_series.mean()
 
-    # 同时用 MA5, MA10, MA20 的角度判断乱序
-    slope5 = df['EMA5'].iloc[idx] - df['EMA5'].iloc[idx-3]
-    slope10 = df['EMA10'].iloc[idx] - df['EMA10'].iloc[idx-3]
-    slope20 = df['EMA20'].iloc[idx] - df['EMA20'].iloc[idx-3]
-    slope_align = (slope5>0 and slope10>0 and slope20>0) or (slope5<0 and slope10<0 and slope20<0)
+    # 1️⃣ 均线顺序判断
+    ordered_up = ma5 > ma10 > ma20
+    ordered_down = ma5 < ma10 < ma20
+    is_messy = not (ordered_up or ordered_down)
 
-    return price_near and ema_flat and not slope_align
+    # 2️⃣ MA20 斜率
+    y = ma20_series.values
+    slope = (y[-1] - y[0]) / len(y) / y[-1]
+    is_flat = abs(slope) < slope_th
+
+    # 3️⃣ 均线间距
+    dist = (abs(ma5 - ma10) + abs(ma10 - ma20)) / row['Close']
+    is_close = dist < dist_th
+
+    # 条件评分
+    score = sum([is_messy, is_flat, is_close])
+
+    # 满足两条及以上判震荡
+    return score >= 2
+
 
 # ==== 信号判断 ====
 def check_call_entry(row): 
