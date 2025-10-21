@@ -74,7 +74,7 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, ma5_len=10, ma10_len=20, ma20_len=40, dist_th=0.012):
+def is_sideways(row, df, ma5_len=5, ma10_len=10, ma20_len=30, dist_th=0.009):
     row_idx = df.index.get_loc(row.name)
     if row_idx < ma20_len:
         return False
