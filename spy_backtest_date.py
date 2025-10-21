@@ -109,8 +109,8 @@ def is_sideways(row, df, idx, window=5, slope_th=0.001, dist_th=0.01):
     # 条件评分
     score = sum([is_messy, is_flat, is_close])
 
-    # 满足两条及以上判震荡
-    return score >= 2
+    # 满足3条判震荡
+    return score >= 3
 
 
 # ==== 信号判断 ====
