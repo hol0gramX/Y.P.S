@@ -74,25 +74,22 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, idx, slope_th=0.002, dist_th=0.0015):
-    if idx < 20:
+def is_sideways(row, df, idx, window=10, price_threshold=0.005, ema_threshold=0.001):
+    if idx < window:
         return False
-    ma5, ma10, ma20 = row['MA5'], row['MA10'], row['MA20']
 
-    # 均线是否顺序排列
-    bullish_order = ma5 > ma10 > ma20
-    bearish_order = ma5 < ma10 < ma20
+    price_near = abs(row['Close'] - row['EMA20']) / row['EMA20'] < price_threshold
+    ema_now = row['EMA20']
+    ema_past = df.iloc[idx - window]['EMA20']
+    ema_flat = abs(ema_now - ema_past) / ema_past < ema_threshold
 
-    # 角度陡峭程度（差距）
-    slope5 = abs(df['MA5'].iloc[idx] - df['MA5'].iloc[idx-3]) / df['MA5'].iloc[idx-3]
-    dist = abs(ma5 - ma20) / ma20
+    # 同时用 MA5, MA10, MA20 的角度判断乱序
+    slope5 = df['EMA5'].iloc[idx] - df['EMA5'].iloc[idx-3]
+    slope10 = df['EMA10'].iloc[idx] - df['EMA10'].iloc[idx-3]
+    slope20 = df['EMA20'].iloc[idx] - df['EMA20'].iloc[idx-3]
+    slope_align = (slope5>0 and slope10>0 and slope20>0) or (slope5<0 and slope10<0 and slope20<0)
 
-    # 若均线未顺排 或 角度太平 → 震荡
-    if not (bullish_order or bearish_order):
-        return True
-    if slope5 < slope_th or dist < dist_th:
-        return True
-    return False
+    return price_near and ema_flat and not slope_align
 
 # ==== 信号判断 ====
 def check_call_entry(row): 
