@@ -74,34 +74,26 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, idx, window=5, slope_th=0.0006):
+def is_sideways(row, df, idx):
     """
-    极严格横盘判断（只保留两个条件）：
-    1️⃣ MA5, MA10, MA20 顺序混乱
-    2️⃣ MA20 斜率过平
-    只有同时满足才判定为横盘
+    极简横盘判断（只保留均线顺序混乱）
     """
-    if idx < max(window, 20):
+    if idx < 20:
         return False
 
     # 计算均线
     ma5 = df['Close'].iloc[idx-5:idx].mean()
     ma10 = df['Close'].iloc[idx-10:idx].mean()
-    ma20_series = df['Close'].iloc[idx-20:idx]
-    ma20 = ma20_series.mean()
+    ma20 = df['Close'].iloc[idx-20:idx].mean()
 
-    # 1️⃣ 均线顺序判断
+    # 均线顺序判断
     ordered_up = ma5 > ma10 > ma20
     ordered_down = ma5 < ma10 < ma20
     is_messy = not (ordered_up or ordered_down)
 
-    # 2️⃣ MA20 斜率
-    y = ma20_series.values
-    slope = (y[-1] - y[0]) / len(y) / y[-1]
-    is_flat = abs(slope) < slope_th
+    # 只靠均线顺序判断横盘
+    return is_messy
 
-    # 同时满足两个条件才判横盘
-    return is_messy and is_flat
 
 
 # ==== 信号判断 ====
