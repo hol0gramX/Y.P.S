@@ -74,7 +74,7 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, idx, window=5, slope_th=0.001, dist_th=0.01):
+def is_sideways(row, df, idx, window=5, slope_th=0.0007, dist_th=0.012):
     """
     改进版智能震荡判断（MA5,10,20 日内/中短线）
     条件评分法：
