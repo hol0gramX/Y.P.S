@@ -34,4 +34,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run diagnostic script
-        run: python diagnose_early_signals.py
+        run: python spy_backtest_original.py
