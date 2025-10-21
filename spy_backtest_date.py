@@ -74,27 +74,32 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, idx):
+def is_sideways(row_idx, df, ma5_len=10, ma10_len=20, ma20_len=40, dist_th=0.012):
     """
-    极简横盘判断（只保留均线顺序混乱）
+    极容易判横盘版本：
+    1️⃣ MA5, MA10, MA20 顺序混乱
+    2️⃣ 或均线间距过小（贴得很近）
+    只要满足任意一条就判横盘
     """
-    if idx < 20:
+    if row_idx < ma20_len:
         return False
 
     # 计算均线
-    ma5 = df['Close'].iloc[idx-5:idx].mean()
-    ma10 = df['Close'].iloc[idx-10:idx].mean()
-    ma20 = df['Close'].iloc[idx-20:idx].mean()
+    ma5 = df['Close'].iloc[row_idx - ma5_len:row_idx].mean()
+    ma10 = df['Close'].iloc[row_idx - ma10_len:row_idx].mean()
+    ma20 = df['Close'].iloc[row_idx - ma20_len:row_idx].mean()
 
-    # 均线顺序判断
+    # 1️⃣ 均线顺序判断
     ordered_up = ma5 > ma10 > ma20
     ordered_down = ma5 < ma10 < ma20
     is_messy = not (ordered_up or ordered_down)
 
-    # 只靠均线顺序判断横盘
-    return is_messy
+    # 2️⃣ 均线间距判断
+    dist = (abs(ma5 - ma10) + abs(ma10 - ma20)) / df['Close'].iloc[row_idx]
+    is_close = dist < dist_th
 
-
+    # 只要顺序乱或者均线贴近就判横盘
+    return is_messy or is_close
 
 # ==== 信号判断 ====
 def check_call_entry(row): 
