@@ -141,14 +141,6 @@ def check_put_entry(row):
     return (row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
             and row['K'] < row['D'])
 
-def allow_bottom_rebound_call(row, prev):
-    return (row['Close'] < row['EMA20'] and row['RSI'] > prev['RSI'] and row['MACDh'] > prev['MACDh'] and row['MACD'] > -0.3
-            and row['K'] > row['D'])
-
-def allow_top_rebound_put(row, prev):
-    return (row['Close'] > row['EMA20'] and row['RSI'] < prev['RSI'] and row['MACDh'] < prev['MACDh'] and row['MACD'] < 0.3
-            and row['K'] < row['D'])
-
 def check_call_exit(row):
     exit_cond = row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
     strong_kdj = row['K'] > row['D']
@@ -218,16 +210,6 @@ def generate_signal(df):
                 state["position"] = "put"
                 save_last_signal(state)
                 return row.name, "📉 主跌浪 Put 入场"
-
-            elif allow_bottom_rebound_call(row, prev):
-                state["position"] = "call"
-                save_last_signal(state)
-                return row.name, "📈 趋势中底部反弹 Call 捕捉"
-
-            elif allow_top_rebound_put(row, prev):
-                state["position"] = "put"
-                save_last_signal(state)
-                return row.name, "📉 趋势中顶部回落 Put 捕捉"
 
     return None, None
 
