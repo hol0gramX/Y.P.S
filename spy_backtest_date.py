@@ -139,8 +139,8 @@ def is_trend_continuation(row, prev, pos):
 
 # ==== 回测主逻辑 ====
 def backtest(start_date_str, end_date_str):
-    start_date = datetime.strptime(start_date_str,"%Y-%m-%d").date()
-    end_date = datetime.strptime(end_date_str,"%Y-%m-%d").date()
+    start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
     print(f"[🔁 回测时间区间] {start_date} ~ {end_date}")
 
     df = fetch_data(start_date, end_date)
@@ -150,15 +150,41 @@ def backtest(start_date_str, end_date_str):
 
     for i in range(1, len(df)):
         row = df.iloc[i]
-        prev = df.iloc[i-1]
+        prev = df.iloc[i - 1]
         ts = row.name
         ttime = ts.time()
 
         if not is_market_day(ts) or ttime < REGULAR_START or ttime >= REGULAR_END:
-            if ttime >= time(15,59) and position!="none":
+            if ttime >= time(15, 59) and position != "none":
                 signals.append(f"[{ts}] ⏰ 收盘前清仓")
-                position="none"
+                position = "none"
             continue
+
+        # ==== 🔍 调参诊断区 ====
+        if time(10, 25) <= ttime <= time(10, 43) and i >= 20:
+            ma5 = df['Close'].iloc[i-5:i].mean()
+            ma10 = df['Close'].iloc[i-10:i].mean()
+            ma20_series = df['Close'].iloc[i-20:i]
+            ma20 = ma20_series.mean()
+
+            ordered_up = ma5 > ma10 > ma20
+            ordered_down = ma5 < ma10 < ma20
+            is_messy = not (ordered_up or ordered_down)
+
+            y = ma20_series.values
+            slope = (y[-1] - y[0]) / len(y) / y[-1]
+            is_flat = abs(slope) < 0.0007
+
+            dist = (abs(ma5 - ma10) + abs(ma10 - ma20)) / row['Close']
+            is_close = dist < 0.012
+
+            score = sum([is_messy, is_flat, is_close])
+            sideways = score >= 3
+            mark = "⭐" if score == 2 else ("❌" if sideways else "")
+
+            print(f"{ts.time()} | sideways={sideways} {mark} | score={score} | "
+                  f"slope={slope:.6f} (flat<{abs(slope):.6f}<0.0007={is_flat}) | "
+                  f"dist={dist:.4f} (<0.012={is_close}) | messy={is_messy}")
 
         # 出场逻辑
         if position=="call" and check_call_exit(row):
