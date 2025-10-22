@@ -65,15 +65,20 @@ def fetch_data(start_date, end_date):
     df['RSI'] = compute_rsi(df['Close'], length=14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['EMA20'] = ta.ema(df['Close'], length=20)
+    df['EMA50'] = ta.ema(df['Close'], length=50)
+    df['EMA200'] = ta.ema(df['Close'], length=200)
     df = compute_macd(df)
     df = compute_kdj(df)
 
-    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','K','D'], inplace=True)
+    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','EMA50','EMA200','K','D'], inplace=True)
     return df
 
 # ==== 趋势判断 ====
-def is_trend_up(df, idx): return df['EMA50'].iloc[idx] > df['EMA200'].iloc[idx]
-def is_trend_down(df, idx): return df['EMA50'].iloc[idx] < df['EMA200'].iloc[idx]
+def is_trend_up(df, idx): 
+    return df['EMA50'].iloc[idx] > df['EMA200'].iloc[idx]
+
+def is_trend_down(df, idx): 
+    return df['EMA50'].iloc[idx] < df['EMA200'].iloc[idx]
 
 # ==== 震荡带判断 ====
 def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
@@ -87,29 +92,44 @@ def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.0
 
 # ==== 信号判断 ====
 def check_call_entry(row): 
-    return row['Close'] > row['EMA20'] and row['RSI'] > 53 and row['MACD']>0 and row['MACDh']>0 and row['RSI_SLOPE']>0.15 and row['K']>row['D']
+    return (row['Close'] > row['EMA20'] and 
+            row['RSI'] > 53 and 
+            row['MACD'] > 0 and 
+            row['MACDh'] > 0 and 
+            row['RSI_SLOPE'] > 0.15 and 
+            row['K'] > row['D'])
 
 def check_put_entry(row): 
-    return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD']<0 and row['MACDh']<0 and row['RSI_SLOPE']<-0.15 and row['K']<row['D']
+    return (row['Close'] < row['EMA20'] and 
+            row['RSI'] < 47 and 
+            row['MACD'] < 0 and 
+            row['MACDh'] < 0 and 
+            row['RSI_SLOPE'] < -0.15 and 
+            row['K'] < row['D'])
 
-def check_call_exit(row):
-    # 提前检测 RSI 掉头或 MACDh 减弱
-    if (row['RSI_SLOPE'] < -0.3 or row['MACDh'] < prev['MACDh'] * 0.5) and row['RSI'] < 55:
-        if row['K'] > row['D'] + 2:  # 稍微宽一点
+# ==== 出场逻辑 ====
+def check_call_exit(row, prev):
+    prev_macdh = prev['MACDh'] if prev['MACDh'] != 0 else 1e-6  # 防止除以零
+    if (row['RSI_SLOPE'] < -0.3 or row['MACDh'] < prev_macdh * 0.5) and row['RSI'] < 55:
+        if row['K'] > row['D'] + 2:  
             return False
         return True
     return False
 
-def check_put_exit(row):
-    if (row['RSI_SLOPE'] > 0.3 or row['MACDh'] > prev['MACDh'] * 0.5) and row['RSI'] > 45:
+def check_put_exit(row, prev):
+    prev_macdh = prev['MACDh'] if prev['MACDh'] != 0 else 1e-6
+    if (row['RSI_SLOPE'] > 0.3 or row['MACDh'] > prev_macdh * 0.5) and row['RSI'] > 45:
         if row['K'] < row['D'] - 2:
             return False
         return True
     return False
 
-
 def is_trend_continuation(row, prev, pos): 
-    return (row['MACDh']>0 and row['RSI']>45) if pos=="call" else (row['MACDh']<0 and row['RSI']<55) if pos=="put" else False
+    if pos == "call":
+        return (row['MACDh'] > 0 and row['RSI'] > 45)
+    elif pos == "put":
+        return (row['MACDh'] < 0 and row['RSI'] < 55)
+    return False
 
 # ==== 回测主逻辑 ====
 def backtest(start_date_str, end_date_str):
@@ -146,7 +166,7 @@ def backtest(start_date_str, end_date_str):
             continue
 
         # 出场及反手
-        if position == "call" and check_call_exit(row):
+        if position == "call" and check_call_exit(row, prev):
             if is_trend_continuation(row, prev, "call"):
                 continue
             signals.append(f"[{ts}] ⚠️ Call 出场"); position = "none"
@@ -154,7 +174,7 @@ def backtest(start_date_str, end_date_str):
                 signals.append(f"[{ts}] 🔁 空仓 -> Put"); position = "put"
             continue
 
-        if position == "put" and check_put_exit(row):
+        if position == "put" and check_put_exit(row, prev):
             if is_trend_continuation(row, prev, "put"):
                 continue
             signals.append(f"[{ts}] ⚠️ Put 出场"); position = "none"
@@ -170,16 +190,15 @@ def backtest(start_date_str, end_date_str):
                 elif check_put_entry(row):
                     signals.append(f"[{ts}] 📉 主跌浪 Put"); position = "put"
 
-
-    last_ts=df.index[-1]
-    if last_ts.time()<REGULAR_END and position!="none": 
+    last_ts = df.index[-1]
+    if last_ts.time() < REGULAR_END and position != "none": 
         signals.append(f"[{last_ts}] ⏰ 收盘前清仓")
     print(f"总信号数：{len(signals)}")
-    for s in signals: print(s)
+    for s in signals:
+        print(s)
 
 if __name__=="__main__":
     backtest("2025-10-21","2025-10-21")
-
 
 
 
