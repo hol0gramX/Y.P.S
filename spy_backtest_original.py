@@ -92,19 +92,21 @@ def check_call_entry(row):
 def check_put_entry(row): 
     return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD']<0 and row['MACDh']<0 and row['RSI_SLOPE']<-0.15 and row['K']<row['D']
 
-def check_call_exit(row): 
-    if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
-        if row['K']>row['D']:   # 金叉保持 → 豁免
+def check_call_exit(row):
+    # 提前检测 RSI 掉头或 MACDh 减弱
+    if (row['RSI_SLOPE'] < -0.3 or row['MACDh'] < prev['MACDh'] * 0.5) and row['RSI'] < 55:
+        if row['K'] > row['D'] + 2:  # 稍微宽一点
             return False
         return True
     return False
 
-def check_put_exit(row): 
-    if row['RSI']>50 and row['RSI_SLOPE']>0 and (row['MACD']>-0.05 or row['MACDh']>-0.05):
-        if row['K']<row['D']:   # 死叉保持 → 豁免
+def check_put_exit(row):
+    if (row['RSI_SLOPE'] > 0.3 or row['MACDh'] > prev['MACDh'] * 0.5) and row['RSI'] > 45:
+        if row['K'] < row['D'] - 2:
             return False
         return True
     return False
+
 
 def is_trend_continuation(row, prev, pos): 
     return (row['MACDh']>0 and row['RSI']>45) if pos=="call" else (row['MACDh']<0 and row['RSI']<55) if pos=="put" else False
