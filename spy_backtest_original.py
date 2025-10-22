@@ -139,16 +139,6 @@ def backtest(start_date_str, end_date_str):
         ts = row.name
         ttime = ts.time()
 
-        # ====== ✅ 调试打印重点时段指标 ======
-        if (time(10,5) <= ttime <= time(10,11)) or \
-           (time(10,23) <= ttime <= time(10,28)) or \
-           (time(10,34) <= ttime <= time(10,40)):
-            print(f"[{ts.strftime('%H:%M:%S')}] Close={row['Close']:.2f} "
-                  f"RSI={row['RSI']:.2f} ΔRSI={row['RSI_SLOPE']:.3f} "
-                  f"MACD={row['MACD']:.3f} MACDh={row['MACDh']:.3f} "
-                  f"K={row['K']:.2f} D={row['D']:.2f} "
-                  f"EMA20={row['EMA20']:.2f}")
-
         # ====== 正常回测逻辑 ======
         if not is_market_day(ts) or ttime < REGULAR_START or ttime >= REGULAR_END:
             if ttime >= time(15,59) and position != "none":
@@ -189,7 +179,7 @@ def backtest(start_date_str, end_date_str):
         print(s)
 
 if __name__=="__main__":
-    backtest("2025-10-21","2025-10-21")
+    backtest("2025-10-16","2025-10-16")
 
 
 
