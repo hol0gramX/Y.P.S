@@ -92,12 +92,6 @@ def check_call_entry(row):
 def check_put_entry(row): 
     return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD']<0 and row['MACDh']<0 and row['RSI_SLOPE']<-0.15 and row['K']<row['D']
 
-def allow_bottom_rebound_call(row, prev): 
-    return row['Close'] < row['EMA20'] and row['RSI']>prev['RSI'] and row['MACDh']>prev['MACDh'] and row['MACD']>-0.3 and row['K']>row['D']
-
-def allow_top_rebound_put(row, prev): 
-    return row['Close'] > row['EMA20'] and row['RSI']<prev['RSI'] and row['MACDh']<prev['MACDh'] and row['MACD']<0.3 and row['K']<row['D']
-
 def check_call_exit(row): 
     if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
         if row['K']>row['D']:   # 金叉保持 → 豁免
@@ -162,8 +156,7 @@ def backtest(start_date_str, end_date_str):
             else:
                 if check_call_entry(row): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
                 elif check_put_entry(row): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
-                elif allow_bottom_rebound_call(row,prev): signals.append(f"[{ts}] 📈 趋势中底部反弹 Call"); position="call"
-                elif allow_top_rebound_put(row,prev): signals.append(f"[{ts}] 📉 趋势中顶部回落 Put"); position="put"
+
 
     last_ts=df.index[-1]
     if last_ts.time()<REGULAR_END and position!="none": 
