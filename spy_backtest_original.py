@@ -65,15 +65,17 @@ def fetch_data(start_date, end_date):
     df['RSI'] = compute_rsi(df['Close'], length=14)
     df['RSI_SLOPE'] = df['RSI'].diff(3)
     df['EMA20'] = ta.ema(df['Close'], length=20)
-    df['MA5'] = ta.sma(df['Close'], length=5)
-    df['MA10'] = ta.sma(df['Close'], length=10)
-    df['MA20'] = ta.sma(df['Close'], length=20)
     df = compute_macd(df)
     df = compute_kdj(df)
-    df.dropna(inplace=True)
+
+    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','K','D'], inplace=True)
     return df
 
-# ==== 均线顺序震荡判断 ====
+# ==== 趋势判断 ====
+def is_trend_up(df, idx): return df['EMA50'].iloc[idx] > df['EMA200'].iloc[idx]
+def is_trend_down(df, idx): return df['EMA50'].iloc[idx] < df['EMA200'].iloc[idx]
+
+# ==== 震荡带判断 ====
 def is_sideways(row, df, idx, window=3, price_threshold=0.002, ema_threshold=0.02):
     if idx < window:
         return False
@@ -90,16 +92,22 @@ def check_call_entry(row):
 def check_put_entry(row): 
     return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD']<0 and row['MACDh']<0 and row['RSI_SLOPE']<-0.15 and row['K']<row['D']
 
+def allow_bottom_rebound_call(row, prev): 
+    return row['Close'] < row['EMA20'] and row['RSI']>prev['RSI'] and row['MACDh']>prev['MACDh'] and row['MACD']>-0.3 and row['K']>row['D']
+
+def allow_top_rebound_put(row, prev): 
+    return row['Close'] > row['EMA20'] and row['RSI']<prev['RSI'] and row['MACDh']<prev['MACDh'] and row['MACD']<0.3 and row['K']<row['D']
+
 def check_call_exit(row): 
     if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
-        if row['K']>row['D']:
+        if row['K']>row['D']:   # 金叉保持 → 豁免
             return False
         return True
     return False
 
 def check_put_exit(row): 
     if row['RSI']>50 and row['RSI_SLOPE']>0 and (row['MACD']>-0.05 or row['MACDh']>-0.05):
-        if row['K']<row['D']:
+        if row['K']<row['D']:   # 死叉保持 → 豁免
             return False
         return True
     return False
@@ -118,7 +126,7 @@ def backtest(start_date_str, end_date_str):
     position = "none"
     signals = []
 
-    for i in range(1, len(df)):
+    for i in range(1,len(df)):
         row = df.iloc[i]
         prev = df.iloc[i-1]
         ts = row.name
@@ -130,31 +138,43 @@ def backtest(start_date_str, end_date_str):
                 position="none"
             continue
 
-        # 出场逻辑
+        # 出场及反手（加入趋势中继）
         if position=="call" and check_call_exit(row):
-            if is_trend_continuation(row, prev, "call"): continue
+            if is_trend_continuation(row, prev, "call"):
+                continue
             signals.append(f"[{ts}] ⚠️ Call 出场"); position="none"
-            if check_put_entry(row) and not is_sideways(row,df,i):
+            if check_put_entry(row) and not is_sideways(row,df,i): 
                 signals.append(f"[{ts}] 🔁 空仓 -> Put"); position="put"
             continue
 
         if position=="put" and check_put_exit(row):
-            if is_trend_continuation(row, prev, "put"): continue
+            if is_trend_continuation(row, prev, "put"):
+                continue
             signals.append(f"[{ts}] ⚠️ Put 出场"); position="none"
-            if check_call_entry(row) and not is_sideways(row,df,i):
+            if check_call_entry(row) and not is_sideways(row,df,i): 
                 signals.append(f"[{ts}] 🔁 空仓 -> Call"); position="call"
             continue
 
-        # 空仓入场逻辑
-        if position=="none" and not is_sideways(row,df,i):
-            if check_call_entry(row): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
-            elif check_put_entry(row): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
+        # 空仓入场
+        if position=="none":
+            if is_sideways(row,df,i):
+                pass
+            else:
+                if check_call_entry(row): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
+                elif check_put_entry(row): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
+                elif allow_bottom_rebound_call(row,prev): signals.append(f"[{ts}] 📈 趋势中底部反弹 Call"); position="call"
+                elif allow_top_rebound_put(row,prev): signals.append(f"[{ts}] 📉 趋势中顶部回落 Put"); position="put"
 
-    last_ts = df.index[-1]
-    if last_ts.time() < REGULAR_END and position!="none": 
+    last_ts=df.index[-1]
+    if last_ts.time()<REGULAR_END and position!="none": 
         signals.append(f"[{last_ts}] ⏰ 收盘前清仓")
     print(f"总信号数：{len(signals)}")
     for s in signals: print(s)
 
-if __name__ == "__main__":
-    backtest("2025-10-20", "2025-10-20")
+if __name__=="__main__":
+    backtest("2025-10-21","2025-10-21")
+
+
+
+
+
