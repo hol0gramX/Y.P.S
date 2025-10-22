@@ -120,42 +120,53 @@ def backtest(start_date_str, end_date_str):
     position = "none"
     signals = []
 
-    for i in range(1,len(df)):
+    for i in range(1, len(df)):
         row = df.iloc[i]
         prev = df.iloc[i-1]
         ts = row.name
         ttime = ts.time()
 
+        # ====== ✅ 调试打印重点时段指标 ======
+        if (time(10,5) <= ttime <= time(10,11)) or \
+           (time(10,23) <= ttime <= time(10,28)) or \
+           (time(10,34) <= ttime <= time(10,40)):
+            print(f"[{ts.strftime('%H:%M:%S')}] Close={row['Close']:.2f} "
+                  f"RSI={row['RSI']:.2f} ΔRSI={row['RSI_SLOPE']:.3f} "
+                  f"MACD={row['MACD']:.3f} MACDh={row['MACDh']:.3f} "
+                  f"K={row['K']:.2f} D={row['D']:.2f} "
+                  f"EMA20={row['EMA20']:.2f}")
+
+        # ====== 正常回测逻辑 ======
         if not is_market_day(ts) or ttime < REGULAR_START or ttime >= REGULAR_END:
-            if ttime >= time(15,59) and position!="none":
+            if ttime >= time(15,59) and position != "none":
                 signals.append(f"[{ts}] ⏰ 收盘前清仓")
-                position="none"
+                position = "none"
             continue
 
-        # 出场及反手（加入趋势中继）
-        if position=="call" and check_call_exit(row):
+        # 出场及反手
+        if position == "call" and check_call_exit(row):
             if is_trend_continuation(row, prev, "call"):
                 continue
-            signals.append(f"[{ts}] ⚠️ Call 出场"); position="none"
-            if check_put_entry(row) and not is_sideways(row,df,i): 
-                signals.append(f"[{ts}] 🔁 空仓 -> Put"); position="put"
+            signals.append(f"[{ts}] ⚠️ Call 出场"); position = "none"
+            if check_put_entry(row) and not is_sideways(row, df, i):
+                signals.append(f"[{ts}] 🔁 空仓 -> Put"); position = "put"
             continue
 
-        if position=="put" and check_put_exit(row):
+        if position == "put" and check_put_exit(row):
             if is_trend_continuation(row, prev, "put"):
                 continue
-            signals.append(f"[{ts}] ⚠️ Put 出场"); position="none"
-            if check_call_entry(row) and not is_sideways(row,df,i): 
-                signals.append(f"[{ts}] 🔁 空仓 -> Call"); position="call"
+            signals.append(f"[{ts}] ⚠️ Put 出场"); position = "none"
+            if check_call_entry(row) and not is_sideways(row, df, i):
+                signals.append(f"[{ts}] 🔁 空仓 -> Call"); position = "call"
             continue
 
         # 空仓入场
-        if position=="none":
-            if is_sideways(row,df,i):
-                pass
-            else:
-                if check_call_entry(row): signals.append(f"[{ts}] 📈 主升浪 Call"); position="call"
-                elif check_put_entry(row): signals.append(f"[{ts}] 📉 主跌浪 Put"); position="put"
+        if position == "none":
+            if not is_sideways(row, df, i):
+                if check_call_entry(row):
+                    signals.append(f"[{ts}] 📈 主升浪 Call"); position = "call"
+                elif check_put_entry(row):
+                    signals.append(f"[{ts}] 📉 主跌浪 Put"); position = "put"
 
 
     last_ts=df.index[-1]
