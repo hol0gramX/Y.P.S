@@ -141,15 +141,26 @@ def check_put_entry(row):
     return (row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD'] < 0 and row['MACDh'] < 0 and row['RSI_SLOPE'] < -0.15
             and row['K'] < row['D'])
 
-def check_call_exit(row):
-    exit_cond = row['RSI'] < 50 and row['RSI_SLOPE'] < 0 and (row['MACD'] < 0.05 or row['MACDh'] < 0.05)
-    strong_kdj = row['K'] > row['D']
-    return exit_cond and not strong_kdj
+# ========== 出场逻辑（已按你要求替换为接受 prev 的新版） ==========
+def check_call_exit(row, prev):
+    prev_macdh = prev.get('MACDh', 0) if isinstance(prev, dict) else prev['MACDh'] if prev is not None else 0
+    prev_macdh = prev_macdh if prev_macdh != 0 else 1e-6
 
-def check_put_exit(row):
-    exit_cond = row['RSI'] > 50 and row['RSI_SLOPE'] > 0 and (row['MACD'] > -0.05 or row['MACDh'] > -0.05)
-    strong_kdj = row['K'] < row['D']
-    return exit_cond and not strong_kdj
+    if (row['RSI_SLOPE'] < -0.3 or row['MACDh'] < prev_macdh * 0.5) and row['RSI'] < 55:
+        if row['K'] > row['D'] + 2:
+            return False
+        return True
+    return False
+
+def check_put_exit(row, prev):
+    prev_macdh = prev.get('MACDh', 0) if isinstance(prev, dict) else prev['MACDh'] if prev is not None else 0
+    prev_macdh = prev_macdh if prev_macdh != 0 else 1e-6
+
+    if (row['RSI_SLOPE'] > 0.3 or row['MACDh'] > prev_macdh * 0.5) and row['RSI'] > 45:
+        if row['K'] < row['D'] - 2:
+            return False
+        return True
+    return False
 
 def is_trend_continuation(row, prev, position):
     if position == "call":
@@ -172,7 +183,8 @@ def generate_signal(df):
 
     # 当前持有 Call
     if pos == "call":
-        if check_call_exit(row):
+        # 注意：这里我们现在把 prev 传给 exit 判断
+        if check_call_exit(row, prev):
             if not is_trend_continuation(row, prev, "call"):
                 state["position"] = "none"
                 save_last_signal(state)
@@ -185,7 +197,8 @@ def generate_signal(df):
 
     # 当前持有 Put
     elif pos == "put":
-        if check_put_exit(row):
+        # 这里也传 prev
+        if check_put_exit(row, prev):
             if not is_trend_continuation(row, prev, "put"):
                 state["position"] = "none"
                 save_last_signal(state)
@@ -253,4 +266,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
