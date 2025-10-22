@@ -68,7 +68,7 @@ def fetch_data(start_date, end_date):
     df = compute_macd(df)
     df = compute_kdj(df)
 
-    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','EMA50','EMA200','K','D'], inplace=True)
+    df.dropna(subset=['High','Low','Close','RSI','RSI_SLOPE','MACD','MACDh','EMA20','K','D'], inplace=True)
     return df
 
 # ==== 震荡带判断 ====
