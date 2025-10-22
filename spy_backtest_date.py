@@ -74,26 +74,35 @@ def fetch_data(start_date, end_date):
     return df
 
 # ==== 均线顺序震荡判断 ====
-def is_sideways(row, df, ma5_len=5, ma10_len=10, ma20_len=30, dist_th=0.009):
-    row_idx = df.index.get_loc(row.name)
-    if row_idx < ma20_len:
+def is_sideways(row, df, idx, window=5, slope_th=0.0006):
+    """
+    极严格横盘判断（只保留两个条件）：
+    1️⃣ MA5, MA10, MA20 顺序混乱
+    2️⃣ MA20 斜率过平
+    只有同时满足才判定为横盘
+    """
+    if idx < max(window, 20):
         return False
 
     # 计算均线
-    ma5 = df['Close'].iloc[row_idx - ma5_len:row_idx].mean()
-    ma10 = df['Close'].iloc[row_idx - ma10_len:row_idx].mean()
-    ma20 = df['Close'].iloc[row_idx - ma20_len:row_idx].mean()
+    ma5 = df['Close'].iloc[idx-5:idx].mean()
+    ma10 = df['Close'].iloc[idx-10:idx].mean()
+    ma20_series = df['Close'].iloc[idx-20:idx]
+    ma20 = ma20_series.mean()
 
-    # 均线顺序判断
+    # 1️⃣ 均线顺序判断
     ordered_up = ma5 > ma10 > ma20
     ordered_down = ma5 < ma10 < ma20
     is_messy = not (ordered_up or ordered_down)
 
-    # 均线间距判断
-    dist = (abs(ma5 - ma10) + abs(ma10 - ma20)) / row['Close']
-    is_close = dist < dist_th
+    # 2️⃣ MA20 斜率
+    y = ma20_series.values
+    slope = (y[-1] - y[0]) / len(y) / y[-1]
+    is_flat = abs(slope) < slope_th
 
-    return is_messy or is_close
+    # 同时满足两个条件才判横盘
+    return is_messy and is_flat
+
 
 # ==== 信号判断 ====
 def check_call_entry(row): 
@@ -169,7 +178,11 @@ def backtest(start_date_str, end_date_str):
     for s in signals: print(s)
 
 if __name__ == "__main__":
-    backtest("2025-10-10", "2025-10-14")
+    backtest("2025-10-21", "2025-10-21")
+
+
+
+
 
 
 
