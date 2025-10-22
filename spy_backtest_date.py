@@ -110,20 +110,21 @@ def check_call_entry(row):
 
 def check_put_entry(row): 
     return row['Close'] < row['EMA20'] and row['RSI'] < 47 and row['MACD']<0 and row['MACDh']<0 and row['RSI_SLOPE']<-0.15 and row['K']<row['D']
-
-def check_call_exit(row): 
-    if row['RSI']<50 and row['RSI_SLOPE']<0 and (row['MACD']<0.05 or row['MACDh']<0.05):
-        if row['K']>row['D']:
+    
+def check_call_exit(row, prev): 
+    if (row['RSI_SLOPE'] < -0.3 or row['MACDh'] < prev['MACDh'] * 0.5) and row['RSI'] < 55:
+        if row['K'] > row['D'] + 2:
             return False
         return True
     return False
 
-def check_put_exit(row): 
-    if row['RSI']>50 and row['RSI_SLOPE']>0 and (row['MACD']>-0.05 or row['MACDh']>-0.05):
-        if row['K']<row['D']:
+def check_put_exit(row, prev): 
+    if (row['RSI_SLOPE'] > 0.3 or row['MACDh'] > prev['MACDh'] * 0.5) and row['RSI'] > 45:
+        if row['K'] < row['D'] - 2:
             return False
         return True
     return False
+
 
 def is_trend_continuation(row, prev, pos): 
     return (row['MACDh']>0 and row['RSI']>45) if pos=="call" else (row['MACDh']<0 and row['RSI']<55) if pos=="put" else False
@@ -152,14 +153,14 @@ def backtest(start_date_str, end_date_str):
             continue
 
         # 出场逻辑
-        if position=="call" and check_call_exit(row):
+        if position=="call" and check_call_exit(row, prev):
             if is_trend_continuation(row, prev, "call"): continue
             signals.append(f"[{ts}] ⚠️ Call 出场"); position="none"
             if check_put_entry(row) and not is_sideways(row,df,i):
                 signals.append(f"[{ts}] 🔁 空仓 -> Put"); position="put"
             continue
 
-        if position=="put" and check_put_exit(row):
+        if position=="put" and check_put_exit(row, prev):
             if is_trend_continuation(row, prev, "put"): continue
             signals.append(f"[{ts}] ⚠️ Put 出场"); position="none"
             if check_call_entry(row) and not is_sideways(row,df,i):
